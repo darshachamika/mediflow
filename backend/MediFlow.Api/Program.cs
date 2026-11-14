@@ -4,6 +4,7 @@ using MediFlow.Api.Auth;
 using MediFlow.Api.Data;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.EntityFrameworkCore;
+using System.Data;
 using System.Security.Claims;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -74,6 +75,31 @@ bookings.MapPost("", async (HttpRequest request, ClaimsPrincipal user,
     var patientId = int.Parse(user.FindFirstValue(FirebaseBearerHandler.AppUserIdClaim)!);
     var booking = await OpdBooking.CreateOrReplayAsync(db, patientId, key, cancellationToken);
     return Results.Ok(new { booking.Id, booking.OpdDate, booking.TokenNumber });
+});
+
+bookings.MapPost("/{bookingId:long}/cancel", async (long bookingId, ClaimsPrincipal user,
+    MediFlowDbContext db, CancellationToken cancellationToken) =>
+{
+    var patientId = int.Parse(user.FindFirstValue(FirebaseBearerHandler.AppUserIdClaim)!);
+    await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+    await OpdBooking.LockQueueAsync(db, cancellationToken);
+
+    var today = OpdBooking.Today();
+    var booking = await db.OpdBookings.SingleOrDefaultAsync(
+        item => item.Id == bookingId && item.PatientId == patientId && item.OpdDate == today, cancellationToken);
+    if (booking is null)
+        return Results.NotFound(new { error = "Booking was not found in today's bookings." });
+    if (booking.Status != OpdBooking.Waiting && booking.Status != OpdBooking.Cancelled)
+        return Results.Conflict(new { error = "Only waiting tokens can be cancelled." });
+
+    if (booking.Status == OpdBooking.Waiting)
+    {
+        booking.Status = OpdBooking.Cancelled;
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
+    await transaction.CommitAsync(cancellationToken);
+    return Results.Ok(new { booking.Id, booking.OpdDate, booking.TokenNumber, booking.Status, booking.CalledAt, booking.CompletedAt });
 });
 
 var queue = api.MapGroup("/opd/queue").RequireAuthorization("OpdStaff");

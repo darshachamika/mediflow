@@ -5,7 +5,7 @@ import { calledTime } from "./opd-time";
 type QueueToken = {
   id: number;
   tokenNumber: number;
-  status: "Waiting" | "Called" | "Completed";
+  status: "Waiting" | "Called" | "Completed" | "Cancelled";
   calledAt: string | null;
   completedAt: string | null;
 };
