@@ -26,6 +26,7 @@ public sealed class MediFlowDbContext(DbContextOptions<MediFlowDbContext> option
         booking.Property(item => item.TokenNumber).HasColumnName("token_number");
         booking.Property(item => item.Status).HasColumnName("status").HasMaxLength(16).HasDefaultValue(OpdBooking.Waiting);
         booking.Property(item => item.CalledAt).HasColumnName("called_at").HasPrecision(6);
+        booking.Property(item => item.CompletedAt).HasColumnName("completed_at").HasPrecision(6);
         booking.HasOne<AppUser>().WithMany().HasForeignKey(item => item.PatientId).OnDelete(DeleteBehavior.Restrict);
         booking.HasIndex(item => new { item.PatientId, item.IdempotencyKey }).IsUnique();
         booking.HasIndex(item => new { item.OpdDate, item.TokenNumber }).IsUnique();

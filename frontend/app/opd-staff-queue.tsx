@@ -2,16 +2,23 @@ import type { User } from "firebase/auth";
 import { useEffect, useState } from "react";
 import { calledTime } from "./opd-time";
 
-type QueueToken = { tokenNumber: number; status: "Waiting" | "Called"; calledAt: string | null };
+type QueueToken = {
+  id: number;
+  tokenNumber: number;
+  status: "Waiting" | "Called" | "Completed";
+  calledAt: string | null;
+  completedAt: string | null;
+};
 type CallResult =
   | { empty: true; token: null }
-  | { empty: false; token: QueueToken & { opdDate: string } };
+  | { empty: false; token: { tokenNumber: number; opdDate: string } };
 
 export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) {
   const [queue, setQueue] = useState<QueueToken[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [calling, setCalling] = useState(false);
+  const [completing, setCompleting] = useState<number | null>(null);
   const [message, setMessage] = useState("");
   const [revision, setRevision] = useState(0);
 
@@ -64,13 +71,36 @@ export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) 
     }
   }
 
-  // Tokens can only be called in ascending order.
-  const lastCalled = queue.findLast((item) => item.status === "Called");
+  async function complete(item: QueueToken) {
+    setCompleting(item.id);
+    setMessage("");
+    try {
+      const token = await user.getIdToken();
+      const response = await fetch(`${apiUrl}/api/opd/queue/${item.id}/complete`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) {
+        const details = await response.json().catch(() => null);
+        setMessage(details?.error ?? `Could not complete token ${item.tokenNumber} (HTTP ${response.status}).`);
+        return;
+      }
+      const completed: QueueToken = await response.json();
+      setQueue((items) => items.map((row) => row.id === completed.id ? completed : row));
+    } catch {
+      setMessage(`Could not confirm completion for token ${item.tokenNumber}. Select Complete to retry.`);
+    } finally {
+      setCompleting(null);
+    }
+  }
+
+  // Completed tokens still count toward the call history.
+  const lastCalled = queue.findLast((item) => item.calledAt !== null);
 
   return (
     <section aria-labelledby="staff-queue">
       <h2 id="staff-queue">Today’s OPD queue</h2>
-      <button type="button" disabled={calling || loading} onClick={callNext}>Call next</button>
+      <button type="button" disabled={calling || loading || completing !== null} onClick={callNext}>Call next</button>
       {message && <p role="status">{message}</p>}
       {loading ? <p role="status">Loading queue…</p> : loadError ? (
         <p role="status">Could not load the queue. Refresh the page to try again.</p>
@@ -79,13 +109,19 @@ export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) 
           <p>{lastCalled ? `Last called token: ${lastCalled.tokenNumber}` : "No tokens called today."}</p>
           {queue.length === 0 ? <p>No tokens booked today.</p> : (
             <table>
-              <thead><tr><th scope="col">Token</th><th scope="col">Status</th><th scope="col">Called time</th></tr></thead>
+              <thead><tr><th scope="col">Token</th><th scope="col">Status</th><th scope="col">Called time</th><th scope="col">Action</th></tr></thead>
               <tbody>
                 {queue.map((item) => (
-                  <tr key={item.tokenNumber}>
+                  <tr key={item.id}>
                     <td>{item.tokenNumber}</td>
                     <td>{item.status}</td>
                     <td>{item.calledAt && <time dateTime={item.calledAt}>{calledTime.format(new Date(item.calledAt))}</time>}</td>
+                    <td>{item.status === "Called" && (
+                      <button type="button" disabled={calling || completing !== null}
+                        aria-label={`Complete token ${item.tokenNumber}`} onClick={() => void complete(item)}>
+                        {completing === item.id ? "Completing…" : "Complete"}
+                      </button>
+                    )}</td>
                   </tr>
                 ))}
               </tbody>

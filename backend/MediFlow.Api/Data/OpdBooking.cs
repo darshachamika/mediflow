@@ -17,8 +17,10 @@ public sealed class OpdBooking
     public int TokenNumber { get; init; }
     public const string Waiting = "Waiting";
     public const string Called = "Called";
+    public const string Completed = "Completed";
     public string Status { get; set; } = Waiting;
     public DateTimeOffset? CalledAt { get; set; }
+    public DateTimeOffset? CompletedAt { get; set; }
 
     // Booking and calling both take this lock so the head of the queue is stable.
     internal static Task LockQueueAsync(MediFlowDbContext db, CancellationToken cancellationToken) =>

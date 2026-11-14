@@ -65,6 +65,11 @@ namespace MediFlow.Api.Data.Migrations
                         .HasColumnType("timestamp(6) with time zone")
                         .HasColumnName("called_at");
 
+                    b.Property<DateTimeOffset?>("CompletedAt")
+                        .HasPrecision(6)
+                        .HasColumnType("timestamp(6) with time zone")
+                        .HasColumnName("completed_at");
+
                     b.Property<string>("IdempotencyKey")
                         .IsRequired()
                         .HasMaxLength(128)

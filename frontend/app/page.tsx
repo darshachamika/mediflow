@@ -8,7 +8,7 @@ import { calledTime } from "./opd-time";
 
 type Profile = { id: number; firebaseUid: string; role: string };
 type Booking = { id: number; opdDate: string; tokenNumber: number };
-type PatientToken = Booking & { status: "Waiting" | "Called"; calledAt: string | null };
+type PatientToken = Booking & { status: "Waiting" | "Called" | "Completed"; calledAt: string | null };
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -230,7 +230,7 @@ export default function Home() {
                     {tokens.map((item) => (
                       <li key={item.id}>
                         Token {item.tokenNumber} for <time dateTime={item.opdDate}>{item.opdDate}</time> · {item.status}
-                        {item.status === "Called" && item.calledAt && (
+                        {item.calledAt && (
                           <> at <time dateTime={item.calledAt}>{calledTime.format(new Date(item.calledAt))}</time></>
                         )}
                       </li>

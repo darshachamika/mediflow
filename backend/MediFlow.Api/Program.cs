@@ -60,7 +60,7 @@ bookings.MapGet("", async (HttpResponse response, ClaimsPrincipal user,
     return await db.OpdBookings.AsNoTracking()
         .Where(booking => booking.PatientId == patientId && booking.OpdDate == opdDate)
         .OrderBy(booking => booking.TokenNumber)
-        .Select(booking => new { booking.Id, booking.OpdDate, booking.TokenNumber, booking.Status, booking.CalledAt })
+        .Select(booking => new { booking.Id, booking.OpdDate, booking.TokenNumber, booking.Status, booking.CalledAt, booking.CompletedAt })
         .ToListAsync(cancellationToken);
 });
 
@@ -83,7 +83,7 @@ queue.MapGet("", async (HttpResponse response, MediFlowDbContext db, Cancellatio
     var today = OpdBooking.Today();
     return await db.OpdBookings.AsNoTracking().Where(booking => booking.OpdDate == today)
         .OrderBy(booking => booking.TokenNumber)
-        .Select(booking => new { booking.TokenNumber, booking.Status, booking.CalledAt })
+        .Select(booking => new { booking.Id, booking.TokenNumber, booking.Status, booking.CalledAt, booking.CompletedAt })
         .ToListAsync(cancellationToken);
 });
 
@@ -99,8 +99,28 @@ queue.MapPost("/call-next", async (HttpRequest request, ClaimsPrincipal user,
     return Results.Ok(new
     {
         empty = booking is null,
-        token = booking is null ? null : new { booking.TokenNumber, booking.Status, booking.CalledAt, booking.OpdDate }
+        token = booking is null ? null : new { booking.TokenNumber, Status = OpdBooking.Called, booking.CalledAt, booking.OpdDate }
     });
+});
+
+queue.MapPost("/{bookingId:long}/complete", async (long bookingId,
+    MediFlowDbContext db, CancellationToken cancellationToken) =>
+{
+    var today = OpdBooking.Today();
+    var target = db.OpdBookings.Where(booking => booking.Id == bookingId && booking.OpdDate == today);
+    await target.Where(booking => booking.Status == OpdBooking.Called)
+        .ExecuteUpdateAsync(setters => setters
+            .SetProperty(booking => booking.Status, OpdBooking.Completed)
+            .SetProperty(booking => booking.CompletedAt, DateTimeOffset.UtcNow), cancellationToken);
+
+    var result = await target.AsNoTracking()
+        .Select(booking => new { booking.Id, booking.TokenNumber, booking.Status, booking.CalledAt, booking.CompletedAt })
+        .SingleOrDefaultAsync(cancellationToken);
+    if (result is null)
+        return Results.NotFound(new { error = "Booking was not found in today's queue." });
+    if (result.Status != OpdBooking.Completed)
+        return Results.Conflict(new { error = "Call this token before completing it." });
+    return Results.Ok(result);
 });
 
 app.Run();
