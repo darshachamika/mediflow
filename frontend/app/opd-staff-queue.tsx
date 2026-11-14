@@ -1,5 +1,5 @@
 import type { User } from "firebase/auth";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { calledTime } from "./opd-time";
 
 type QueueToken = {
@@ -14,37 +14,74 @@ type CallResult =
   | { empty: false; token: { tokenNumber: number; opdDate: string } };
 
 export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) {
-  const [queue, setQueue] = useState<QueueToken[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loadedQueue, setQueue] = useState<QueueToken[] | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [calling, setCalling] = useState(false);
   const [completing, setCompleting] = useState<number | null>(null);
   const [message, setMessage] = useState("");
-  const [revision, setRevision] = useState(0);
+  const refreshAfterAction = useRef<(() => void) | null>(null);
   const [statusFilter, setStatusFilter] = useState<"All" | QueueToken["status"]>("All");
 
   useEffect(() => {
     const controller = new AbortController();
-    async function loadQueue() {
+    const { signal } = controller;
+    let inFlight = false;
+    let refreshPending = false;
+    let revision = 0;
+
+    async function loadQueue(queueIfBusy = false) {
+      if (signal.aborted || document.visibilityState !== "visible") return;
+      if (inFlight) {
+        refreshPending ||= queueIfBusy;
+        return;
+      }
+
+      inFlight = true;
+      const requestRevision = revision;
       try {
         const token = await user.getIdToken();
+        if (signal.aborted) return;
         const response = await fetch(`${apiUrl}/api/opd/queue`, {
           headers: { Authorization: `Bearer ${token}` },
           cache: "no-store",
-          signal: controller.signal,
+          signal,
         });
         if (!response.ok) throw new Error("Queue request failed");
         const items: QueueToken[] = await response.json();
-        if (!controller.signal.aborted) setQueue(items);
+        if (!signal.aborted && requestRevision === revision) {
+          setQueue(items);
+          setLoadError(false);
+        }
       } catch {
-        if (!controller.signal.aborted) setLoadError(true);
+        if (!signal.aborted && requestRevision === revision) setLoadError(true);
       } finally {
-        if (!controller.signal.aborted) setLoading(false);
+        inFlight = false;
+        if (refreshPending) {
+          refreshPending = false;
+          void loadQueue();
+        }
       }
     }
+
+    function refreshWhenVisible() {
+      void loadQueue(true);
+    }
+
+    refreshAfterAction.current = () => {
+      // Any read already in progress may reflect the queue before the action.
+      revision++;
+      void loadQueue(true);
+    };
     void loadQueue();
-    return () => controller.abort();
-  }, [apiUrl, user, revision]);
+    const interval = window.setInterval(() => void loadQueue(), 10_000);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      controller.abort();
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      refreshAfterAction.current = null;
+    };
+  }, [apiUrl, user]);
 
   async function callNext() {
     setCalling(true);
@@ -62,9 +99,7 @@ export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) 
       const result: CallResult = await response.json();
       sessionStorage.removeItem(pendingKey);
       setMessage(result.empty ? "No tokens are waiting." : `Called token ${result.token.tokenNumber} for ${result.token.opdDate}.`);
-      setLoading(true);
-      setLoadError(false);
-      setRevision((value) => value + 1);
+      refreshAfterAction.current?.();
     } catch {
       setMessage("Could not confirm the call. Select Call next to retry.");
     } finally {
@@ -86,8 +121,7 @@ export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) 
         setMessage(details?.error ?? `Could not complete token ${item.tokenNumber} (HTTP ${response.status}).`);
         return;
       }
-      const completed: QueueToken = await response.json();
-      setQueue((items) => items.map((row) => row.id === completed.id ? completed : row));
+      refreshAfterAction.current?.();
     } catch {
       setMessage(`Could not confirm completion for token ${item.tokenNumber}. Select Complete to retry.`);
     } finally {
@@ -95,6 +129,8 @@ export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) 
     }
   }
 
+  const queue = loadedQueue ?? [];
+  const loading = loadedQueue === null && !loadError;
   // Completed tokens still count toward the call history.
   const lastCalled = queue.findLast((item) => item.calledAt !== null);
   const counts = { Waiting: 0, Called: 0, Completed: 0, Cancelled: 0 };
@@ -108,9 +144,11 @@ export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) 
       <h2 id="staff-queue">Today’s OPD queue</h2>
       <button type="button" disabled={calling || loading || completing !== null} onClick={callNext}>Call next</button>
       {message && <p role="status">{message}</p>}
-      {loading ? <p role="status">Loading queue…</p> : loadError ? (
-        <p role="status">Could not load the queue. Refresh the page to try again.</p>
-      ) : (
+      {loading && <p role="status">Loading queue…</p>}
+      {loadError && <p role="status">{loadedQueue === null
+        ? "Could not load the queue. The page will retry automatically."
+        : "Could not refresh the queue. Showing the last update."}</p>}
+      {loadedQueue !== null && (
         <>
           <p>{lastCalled ? `Last called token: ${lastCalled.tokenNumber}` : "No tokens called today."}</p>
           <dl aria-label="Queue status counts">
