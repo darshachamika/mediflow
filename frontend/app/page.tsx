@@ -1,11 +1,12 @@
 "use client";
 
 import { FirebaseError, getApps, initializeApp } from "firebase/app";
-import { getAuth, inMemoryPersistence, setPersistence, signInWithEmailAndPassword, signOut, type User } from "firebase/auth";
-import { useState, type FormEvent } from "react";
+import { browserSessionPersistence, getAuth, initializeAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from "firebase/auth";
+import { useEffect, useState, type FormEvent } from "react";
 
 type Profile = { id: number; firebaseUid: string; role: string };
 type Booking = { id: number; opdDate: string; tokenNumber: number };
+type TokenList = { status: "loading" | "error" } | { status: "ready"; bookings: Booking[] };
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -14,53 +15,104 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5080";
+const firebaseConfigured = Object.values(firebaseConfig).every(Boolean);
+
+async function fetchTokens(user: User, signal?: AbortSignal): Promise<TokenList> {
+  try {
+    const token = await user.getIdToken();
+    const response = await fetch(`${apiUrl}/api/opd/bookings`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+      signal,
+    });
+    if (response.ok) return { status: "ready", bookings: await response.json() };
+  } catch {
+    // Keep list errors separate from booking errors so a confirmed booking is never retried.
+  }
+  return { status: "error" };
+}
 
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [booking, setBooking] = useState<Booking | null>(null);
+  const [tokenList, setTokenList] = useState<TokenList>({ status: "loading" });
+  const [authReady, setAuthReady] = useState(!firebaseConfigured);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
 
-  async function loadProfile(signedInUser: User) {
-    const token = await signedInUser.getIdToken();
-    const response = await fetch(`${apiUrl}/api/me`, {
-      headers: { Authorization: `Bearer ${token}` },
-      cache: "no-store",
+  useEffect(() => {
+    if (!firebaseConfigured) return;
+
+    const auth = getApps().length
+      ? getAuth()
+      : initializeAuth(initializeApp(firebaseConfig), { persistence: browserSessionPersistence });
+    let pending: AbortController | undefined;
+    const unsubscribe = onAuthStateChanged(auth, async (signedInUser) => {
+      pending?.abort();
+      const controller = new AbortController();
+      pending = controller;
+      const { signal } = controller;
+      setUser(signedInUser);
+      setAuthReady(true);
+      setProfile(null);
+      setBooking(null);
+      setTokenList({ status: "loading" });
+      setMessage("");
+      if (!signedInUser) return;
+
+      try {
+        const token = await signedInUser.getIdToken();
+        const response = await fetch(`${apiUrl}/api/me`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+          signal,
+        });
+        if (signal.aborted) return;
+        if (response.status === 403) {
+          setMessage("Your Firebase account is signed in. Ask an administrator to provision your MediFlow account.");
+        } else if (response.status === 401) {
+          setMessage("The API rejected your sign-in token. Sign out and try again.");
+        } else if (response.ok) {
+          const signedInProfile: Profile = await response.json();
+          if (signal.aborted) return;
+          setProfile(signedInProfile);
+          if (signedInProfile.role === "Patient") {
+            const list = await fetchTokens(signedInUser, signal);
+            if (!signal.aborted) setTokenList(list);
+          }
+        } else {
+          setMessage("The API could not load your profile.");
+        }
+      } catch {
+        if (!signal.aborted) setMessage("Could not reach the MediFlow API.");
+      }
     });
-    if (response.ok) {
-      setProfile(await response.json());
-    } else if (response.status === 403) {
-      setMessage("Your Firebase account is signed in. Ask an administrator to provision your MediFlow account.");
-    } else if (response.status === 401) {
-      setMessage("The API rejected your sign-in token. Sign out and try again.");
-    } else {
-      setMessage("The API could not load your profile.");
-    }
-  }
+
+    return () => {
+      unsubscribe();
+      pending?.abort();
+    };
+  }, []);
 
   async function handleSignIn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     setMessage("");
-    if (Object.values(firebaseConfig).some((value) => !value)) {
+    if (!firebaseConfigured) {
       setMessage("Set the Firebase web app configuration before signing in.");
       return;
     }
 
     setBusy(true);
     try {
-      const auth = getAuth(getApps()[0] ?? initializeApp(firebaseConfig));
-      await setPersistence(auth, inMemoryPersistence);
-      const { user: signedInUser } = await signInWithEmailAndPassword(
-        auth, String(form.get("email")), String(form.get("password")),
+      await signInWithEmailAndPassword(
+        getAuth(), String(form.get("email")), String(form.get("password")),
       );
-      setUser(signedInUser);
-      await loadProfile(signedInUser);
     } catch (error) {
       setMessage(error instanceof FirebaseError && error.code.startsWith("auth/")
         ? "Firebase could not complete the request. Check your credentials and Firebase configuration."
-        : "Could not reach the MediFlow API.");
+        : "Could not sign in. Try again.");
     } finally {
       setBusy(false);
     }
@@ -70,10 +122,6 @@ export default function Home() {
     setBusy(true);
     try {
       await signOut(getAuth());
-      setUser(null);
-      setProfile(null);
-      setBooking(null);
-      setMessage("");
     } catch {
       setMessage("Could not sign out. Try again.");
     } finally {
@@ -101,6 +149,8 @@ export default function Home() {
       const assignedBooking: Booking = await response.json();
       sessionStorage.removeItem(pendingKey);
       setBooking(assignedBooking);
+      setTokenList({ status: "loading" });
+      setTokenList(await fetchTokens(user));
     } catch {
       setMessage("Could not confirm your booking. Select Book OPD token to retry.");
     } finally {
@@ -111,7 +161,7 @@ export default function Home() {
   return (
     <main>
       <h1>MediFlow</h1>
-      {user ? (
+      {!authReady ? <p role="status">Restoring sign-in…</p> : user ? (
         <>
           <p>Signed in as {user.email}</p>
           {profile && (
@@ -126,8 +176,22 @@ export default function Home() {
           )}
           {profile?.role === "Patient" && (
             <>
-              <button type="button" disabled={busy} onClick={handleBooking}>Book OPD token</button>
-              {booking && <p role="status">OPD token {booking.tokenNumber} for {booking.opdDate}</p>}
+              <button type="button" disabled={busy || tokenList.status === "loading"} onClick={handleBooking}>Book OPD token</button>
+              {booking && <p role="status">Booked OPD token {booking.tokenNumber} for {booking.opdDate}</p>}
+              <section aria-labelledby="today-tokens">
+                <h2 id="today-tokens">Today’s OPD tokens</h2>
+                {tokenList.status === "loading" && <p role="status">Loading tokens…</p>}
+                {tokenList.status === "error" && <p role="status">Could not load your tokens. Refresh the page to try again.</p>}
+                {tokenList.status === "ready" && (tokenList.bookings.length === 0 ? (
+                  <p>You have no OPD tokens for today.</p>
+                ) : (
+                  <ul>
+                    {tokenList.bookings.map((item) => (
+                      <li key={item.id}>Token {item.tokenNumber} for <time dateTime={item.opdDate}>{item.opdDate}</time></li>
+                    ))}
+                  </ul>
+                ))}
+              </section>
             </>
           )}
           <button type="button" disabled={busy} onClick={handleSignOut}>Sign out</button>

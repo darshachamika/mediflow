@@ -48,7 +48,22 @@ api.MapGet("/me", (ClaimsPrincipal user) => Results.Ok(new
     role = user.FindFirstValue(ClaimTypes.Role)
 }));
 
-api.MapPost("/opd/bookings", async (HttpRequest request, ClaimsPrincipal user,
+var bookings = api.MapGroup("/opd/bookings").RequireAuthorization("Patient");
+
+bookings.MapGet("", async (HttpResponse response, ClaimsPrincipal user,
+    MediFlowDbContext db, CancellationToken cancellationToken) =>
+{
+    var patientId = int.Parse(user.FindFirstValue(FirebaseBearerHandler.AppUserIdClaim)!);
+    var opdDate = OpdBooking.Today();
+    response.Headers.CacheControl = "no-store";
+    return await db.OpdBookings.AsNoTracking()
+        .Where(booking => booking.PatientId == patientId && booking.OpdDate == opdDate)
+        .OrderBy(booking => booking.TokenNumber)
+        .Select(booking => new { booking.Id, booking.OpdDate, booking.TokenNumber })
+        .ToListAsync(cancellationToken);
+});
+
+bookings.MapPost("", async (HttpRequest request, ClaimsPrincipal user,
     MediFlowDbContext db, CancellationToken cancellationToken) =>
 {
     var keys = request.Headers["Idempotency-Key"];
@@ -59,6 +74,6 @@ api.MapPost("/opd/bookings", async (HttpRequest request, ClaimsPrincipal user,
     var patientId = int.Parse(user.FindFirstValue(FirebaseBearerHandler.AppUserIdClaim)!);
     var booking = await OpdBooking.CreateOrReplayAsync(db, patientId, key, cancellationToken);
     return Results.Ok(new { booking.Id, booking.OpdDate, booking.TokenNumber });
-}).RequireAuthorization("Patient");
+});
 
 app.Run();

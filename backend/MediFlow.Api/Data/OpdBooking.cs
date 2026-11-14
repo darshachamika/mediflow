@@ -7,6 +7,9 @@ public sealed class OpdBooking
 {
     private static readonly TimeZoneInfo OpdTimeZone = TimeZoneInfo.FindSystemTimeZoneById("Asia/Colombo");
 
+    public static DateOnly Today() =>
+        DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, OpdTimeZone).DateTime);
+
     public long Id { get; init; }
     public int PatientId { get; init; }
     public required string IdempotencyKey { get; init; }
@@ -24,7 +27,7 @@ public sealed class OpdBooking
             item => item.PatientId == patientId && item.IdempotencyKey == key, cancellationToken);
         if (booking is null)
         {
-            var opdDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, OpdTimeZone).DateTime);
+            var opdDate = Today();
             var lastToken = await db.OpdBookings.Where(item => item.OpdDate == opdDate)
                 .MaxAsync(item => (int?)item.TokenNumber, cancellationToken) ?? 0;
             booking = new OpdBooking
