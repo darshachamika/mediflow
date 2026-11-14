@@ -2,12 +2,13 @@
 
 import { FirebaseError, getApps, initializeApp } from "firebase/app";
 import { browserSessionPersistence, getAuth, initializeAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from "firebase/auth";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { OpdStaffQueue } from "./opd-staff-queue";
+import { calledTime } from "./opd-time";
 
 type Profile = { id: number; firebaseUid: string; role: string };
 type Booking = { id: number; opdDate: string; tokenNumber: number };
-type TokenList = { status: "loading" | "error" } | { status: "ready"; bookings: Booking[] };
+type PatientToken = Booking & { status: "Waiting" | "Called"; calledAt: string | null };
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -18,26 +19,13 @@ const firebaseConfig = {
 const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5080";
 const firebaseConfigured = Object.values(firebaseConfig).every(Boolean);
 
-async function fetchTokens(user: User, signal?: AbortSignal): Promise<TokenList> {
-  try {
-    const token = await user.getIdToken();
-    const response = await fetch(`${apiUrl}/api/opd/bookings`, {
-      headers: { Authorization: `Bearer ${token}` },
-      cache: "no-store",
-      signal,
-    });
-    if (response.ok) return { status: "ready", bookings: await response.json() };
-  } catch {
-    // Keep list errors separate from booking errors so a confirmed booking is never retried.
-  }
-  return { status: "error" };
-}
-
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [booking, setBooking] = useState<Booking | null>(null);
-  const [tokenList, setTokenList] = useState<TokenList>({ status: "loading" });
+  const [tokens, setTokens] = useState<PatientToken[] | null>(null);
+  const [tokenError, setTokenError] = useState(false);
+  const refreshTokens = useRef<(() => void) | null>(null);
   const [authReady, setAuthReady] = useState(!firebaseConfigured);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -58,7 +46,8 @@ export default function Home() {
       setAuthReady(true);
       setProfile(null);
       setBooking(null);
-      setTokenList({ status: "loading" });
+      setTokens(null);
+      setTokenError(false);
       setMessage("");
       if (!signedInUser) return;
 
@@ -78,10 +67,6 @@ export default function Home() {
           const signedInProfile: Profile = await response.json();
           if (signal.aborted) return;
           setProfile(signedInProfile);
-          if (signedInProfile.role === "Patient") {
-            const list = await fetchTokens(signedInUser, signal);
-            if (!signal.aborted) setTokenList(list);
-          }
         } else {
           setMessage("The API could not load your profile.");
         }
@@ -95,6 +80,62 @@ export default function Home() {
       pending?.abort();
     };
   }, []);
+
+  const patient = profile?.role === "Patient" ? user : null;
+  useEffect(() => {
+    if (!patient) return;
+    const controller = new AbortController();
+    const { signal } = controller;
+    let inFlight = false;
+    let refreshQueued = false;
+
+    const refresh = async (queueIfBusy = false) => {
+      if (signal.aborted || document.visibilityState !== "visible") return;
+      if (inFlight) {
+        refreshQueued ||= queueIfBusy;
+        return;
+      }
+
+      inFlight = true;
+      try {
+        const token = await patient.getIdToken();
+        const response = await fetch(`${apiUrl}/api/opd/bookings`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+          signal,
+        });
+        if (!response.ok) throw new Error("Token list request failed");
+        const items: PatientToken[] = await response.json();
+        if (!signal.aborted) {
+          setTokens(items);
+          setTokenError(false);
+        }
+      } catch {
+        if (!signal.aborted) setTokenError(true);
+      } finally {
+        inFlight = false;
+        if (refreshQueued) {
+          refreshQueued = false;
+          void refresh();
+        }
+      }
+    };
+
+    function refreshNow() {
+      void refresh(true);
+    }
+
+    refreshTokens.current = refreshNow;
+    refreshNow();
+    const interval = window.setInterval(() => void refresh(), 10_000);
+    document.addEventListener("visibilitychange", refreshNow);
+    return () => {
+      controller.abort();
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", refreshNow);
+      refreshTokens.current = null;
+    };
+  }, [patient]);
 
   async function handleSignIn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -150,8 +191,7 @@ export default function Home() {
       const assignedBooking: Booking = await response.json();
       sessionStorage.removeItem(pendingKey);
       setBooking(assignedBooking);
-      setTokenList({ status: "loading" });
-      setTokenList(await fetchTokens(user));
+      refreshTokens.current?.();
     } catch {
       setMessage("Could not confirm your booking. Select Book OPD token to retry.");
     } finally {
@@ -177,18 +217,23 @@ export default function Home() {
           )}
           {profile?.role === "Patient" && (
             <>
-              <button type="button" disabled={busy || tokenList.status === "loading"} onClick={handleBooking}>Book OPD token</button>
+              <button type="button" disabled={busy} onClick={handleBooking}>Book OPD token</button>
               {booking && <p role="status">Booked OPD token {booking.tokenNumber} for {booking.opdDate}</p>}
               <section aria-labelledby="today-tokens">
                 <h2 id="today-tokens">Today’s OPD tokens</h2>
-                {tokenList.status === "loading" && <p role="status">Loading tokens…</p>}
-                {tokenList.status === "error" && <p role="status">Could not load your tokens. Refresh the page to try again.</p>}
-                {tokenList.status === "ready" && (tokenList.bookings.length === 0 ? (
+                {tokens === null && !tokenError && <p role="status">Loading tokens…</p>}
+                {tokenError && <p role="status">{tokens === null ? "Could not load your tokens." : "Could not refresh your tokens. Showing the last update."}</p>}
+                {tokens && (tokens.length === 0 ? (
                   <p>You have no OPD tokens for today.</p>
                 ) : (
                   <ul>
-                    {tokenList.bookings.map((item) => (
-                      <li key={item.id}>Token {item.tokenNumber} for <time dateTime={item.opdDate}>{item.opdDate}</time></li>
+                    {tokens.map((item) => (
+                      <li key={item.id}>
+                        Token {item.tokenNumber} for <time dateTime={item.opdDate}>{item.opdDate}</time> · {item.status}
+                        {item.status === "Called" && item.calledAt && (
+                          <> at <time dateTime={item.calledAt}>{calledTime.format(new Date(item.calledAt))}</time></>
+                        )}
+                      </li>
                     ))}
                   </ul>
                 ))}

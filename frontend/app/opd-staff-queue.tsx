@@ -1,18 +1,11 @@
 import type { User } from "firebase/auth";
 import { useEffect, useState } from "react";
+import { calledTime } from "./opd-time";
 
 type QueueToken = { tokenNumber: number; status: "Waiting" | "Called"; calledAt: string | null };
 type CallResult =
   | { empty: true; token: null }
   | { empty: false; token: QueueToken & { opdDate: string } };
-
-const calledTime = new Intl.DateTimeFormat(undefined, {
-  timeZone: "Asia/Colombo",
-  hour: "numeric",
-  minute: "2-digit",
-  second: "2-digit",
-  timeZoneName: "short",
-});
 
 export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) {
   const [queue, setQueue] = useState<QueueToken[]>([]);
