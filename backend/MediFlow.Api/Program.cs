@@ -19,8 +19,8 @@ builder.Services.AddSingleton(_ => FirebaseApp.Create(new AppOptions
 
 builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
     policy.WithOrigins(builder.Configuration["Frontend:Origin"]!)
-        .WithMethods("GET")
-        .WithHeaders("Authorization")));
+        .WithMethods("GET", "POST")
+        .WithHeaders("Authorization", "Idempotency-Key")));
 
 builder.Services.AddAuthentication(FirebaseBearerHandler.SchemeName)
     .AddScheme<AuthenticationSchemeOptions, FirebaseBearerHandler>(
@@ -28,7 +28,8 @@ builder.Services.AddAuthentication(FirebaseBearerHandler.SchemeName)
 
 builder.Services.AddAuthorizationBuilder()
     .AddPolicy("AppUser", policy => policy.RequireAuthenticatedUser()
-        .RequireClaim(FirebaseBearerHandler.AppUserIdClaim));
+        .RequireClaim(FirebaseBearerHandler.AppUserIdClaim))
+    .AddPolicy("Patient", policy => policy.RequireRole("Patient"));
 
 var app = builder.Build();
 
@@ -46,5 +47,18 @@ api.MapGet("/me", (ClaimsPrincipal user) => Results.Ok(new
     firebaseUid = user.FindFirstValue(ClaimTypes.NameIdentifier),
     role = user.FindFirstValue(ClaimTypes.Role)
 }));
+
+api.MapPost("/opd/bookings", async (HttpRequest request, ClaimsPrincipal user,
+    MediFlowDbContext db, CancellationToken cancellationToken) =>
+{
+    var keys = request.Headers["Idempotency-Key"];
+    var key = keys.Count == 1 ? keys[0]?.Trim() : null;
+    if (string.IsNullOrEmpty(key) || key.Length > 128 || key.Any(c => c < '!' || c > '~' || c == ','))
+        return Results.BadRequest(new { error = "Supply one Idempotency-Key of 1–128 visible ASCII characters without commas." });
+
+    var patientId = int.Parse(user.FindFirstValue(FirebaseBearerHandler.AppUserIdClaim)!);
+    var booking = await OpdBooking.CreateOrReplayAsync(db, patientId, key, cancellationToken);
+    return Results.Ok(new { booking.Id, booking.OpdDate, booking.TokenNumber });
+}).RequireAuthorization("Patient");
 
 app.Run();

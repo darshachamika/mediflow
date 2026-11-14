@@ -5,6 +5,7 @@ import { getAuth, inMemoryPersistence, setPersistence, signInWithEmailAndPasswor
 import { useState, type FormEvent } from "react";
 
 type Profile = { id: number; firebaseUid: string; role: string };
+type Booking = { id: number; opdDate: string; tokenNumber: number };
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -17,6 +18,7 @@ const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5080";
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [booking, setBooking] = useState<Booking | null>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -70,9 +72,37 @@ export default function Home() {
       await signOut(getAuth());
       setUser(null);
       setProfile(null);
+      setBooking(null);
       setMessage("");
     } catch {
       setMessage("Could not sign out. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleBooking() {
+    if (!user || profile?.role !== "Patient" || busy) return;
+
+    setBusy(true);
+    setMessage("");
+    setBooking(null);
+    try {
+      const pendingKey = `mediflow:opd:${apiUrl}:${user.uid}`;
+      const key = sessionStorage.getItem(pendingKey) ?? crypto.randomUUID();
+      sessionStorage.setItem(pendingKey, key);
+      const token = await user.getIdToken();
+      const response = await fetch(`${apiUrl}/api/opd/bookings`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Idempotency-Key": key },
+      });
+      if (!response.ok) throw new Error("Booking request failed");
+
+      const assignedBooking: Booking = await response.json();
+      sessionStorage.removeItem(pendingKey);
+      setBooking(assignedBooking);
+    } catch {
+      setMessage("Could not confirm your booking. Select Book OPD token to retry.");
     } finally {
       setBusy(false);
     }
@@ -93,6 +123,12 @@ export default function Home() {
               <dt>Role</dt>
               <dd>{profile.role}</dd>
             </dl>
+          )}
+          {profile?.role === "Patient" && (
+            <>
+              <button type="button" disabled={busy} onClick={handleBooking}>Book OPD token</button>
+              {booking && <p role="status">OPD token {booking.tokenNumber} for {booking.opdDate}</p>}
+            </>
           )}
           <button type="button" disabled={busy} onClick={handleSignOut}>Sign out</button>
         </>

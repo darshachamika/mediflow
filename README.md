@@ -75,6 +75,12 @@ ON CONFLICT (firebase_uid) DO NOTHING;
 
 Sign out and back in. Check that `GET /api/me` returns HTTP 200 with the account's own `id`, `firebaseUid`, and `role` of `Patient`. The database controls the role.
 
+## Book an OPD token
+
+Apply the latest migration, then sign in as a provisioned Patient and select **Book OPD token**. The page shows the assigned number and OPD date. If the request fails, select the same button to retry with the same key.
+
+`POST /api/opd/bookings` takes a Firebase Bearer token and an `Idempotency-Key` header. A successful request returns HTTP 200 with `id`, `opdDate`, and `tokenNumber`. Repeat the same key as the same patient to retrieve the original booking, even after the OPD date changes. Each new key creates a booking. Token numbers start at 1 each day in Asia/Colombo.
+
 ## Build checks
 
 ```powershell
