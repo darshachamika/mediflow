@@ -21,6 +21,7 @@ export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) 
   const [message, setMessage] = useState("");
   const refreshAfterAction = useRef<(() => void) | null>(null);
   const [statusFilter, setStatusFilter] = useState<"All" | QueueToken["status"]>("All");
+  const [tokenSearch, setTokenSearch] = useState("");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -137,7 +138,10 @@ export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) 
   for (const item of queue) {
     counts[item.status]++;
   }
-  const visibleRows = statusFilter === "All" ? queue : queue.filter((item) => item.status === statusFilter);
+  const searchedToken = tokenSearch.trim();
+  const visibleRows = queue.filter((item) =>
+    (statusFilter === "All" || item.status === statusFilter)
+    && (searchedToken === "" || String(item.tokenNumber) === searchedToken));
 
   return (
     <section aria-labelledby="staff-queue">
@@ -166,8 +170,15 @@ export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) 
               {Object.keys(counts).map((status) => <option key={status}>{status}</option>)}
             </select>
           </label>
+          <label>
+            Token number{" "}
+            <input type="search" inputMode="numeric" value={tokenSearch}
+              onChange={(event) => setTokenSearch(event.target.value)} />
+          </label>
           {visibleRows.length === 0 ? (
-            <p>{statusFilter === "All" ? "No tokens booked today." : `No tokens match the ${statusFilter} status.`}</p>
+            <p>{searchedToken === "" && statusFilter === "All"
+              ? "No tokens booked today."
+              : "No tokens match the current search and status filter."}</p>
           ) : (
             <table>
               <thead><tr><th scope="col">Token</th><th scope="col">Status</th><th scope="col">Called time</th><th scope="col">Action</th></tr></thead>
