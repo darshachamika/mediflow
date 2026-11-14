@@ -61,7 +61,20 @@ bookings.MapGet("", async (HttpResponse response, ClaimsPrincipal user,
     return await db.OpdBookings.AsNoTracking()
         .Where(booking => booking.PatientId == patientId && booking.OpdDate == opdDate)
         .OrderBy(booking => booking.TokenNumber)
-        .Select(booking => new { booking.Id, booking.OpdDate, booking.TokenNumber, booking.Status, booking.CalledAt, booking.CompletedAt })
+        .Select(booking => new
+        {
+            booking.Id,
+            booking.OpdDate,
+            booking.TokenNumber,
+            booking.Status,
+            booking.CalledAt,
+            booking.CompletedAt,
+            WaitingAhead = booking.Status == OpdBooking.Waiting
+                ? (int?)db.OpdBookings.Count(earlier => earlier.OpdDate == booking.OpdDate
+                    && earlier.Status == OpdBooking.Waiting
+                    && earlier.TokenNumber < booking.TokenNumber)
+                : null
+        })
         .ToListAsync(cancellationToken);
 });
 
