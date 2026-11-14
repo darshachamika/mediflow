@@ -6,6 +6,7 @@ public sealed class MediFlowDbContext(DbContextOptions<MediFlowDbContext> option
 {
     public DbSet<AppUser> AppUsers => Set<AppUser>();
     public DbSet<OpdBooking> OpdBookings => Set<OpdBooking>();
+    public DbSet<OpdCallAction> OpdCallActions => Set<OpdCallAction>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -23,8 +24,20 @@ public sealed class MediFlowDbContext(DbContextOptions<MediFlowDbContext> option
         booking.Property(item => item.IdempotencyKey).HasColumnName("idempotency_key").HasMaxLength(128);
         booking.Property(item => item.OpdDate).HasColumnName("opd_date");
         booking.Property(item => item.TokenNumber).HasColumnName("token_number");
+        booking.Property(item => item.Status).HasColumnName("status").HasMaxLength(16).HasDefaultValue(OpdBooking.Waiting);
+        booking.Property(item => item.CalledAt).HasColumnName("called_at").HasPrecision(6);
         booking.HasOne<AppUser>().WithMany().HasForeignKey(item => item.PatientId).OnDelete(DeleteBehavior.Restrict);
         booking.HasIndex(item => new { item.PatientId, item.IdempotencyKey }).IsUnique();
         booking.HasIndex(item => new { item.OpdDate, item.TokenNumber }).IsUnique();
+
+        var call = modelBuilder.Entity<OpdCallAction>();
+        call.ToTable("opd_call_actions");
+        call.HasKey(action => new { action.StaffId, action.IdempotencyKey });
+        call.Property(action => action.StaffId).HasColumnName("staff_id");
+        call.Property(action => action.IdempotencyKey).HasColumnName("idempotency_key").HasMaxLength(128);
+        call.Property(action => action.BookingId).HasColumnName("booking_id");
+        call.HasOne<AppUser>().WithMany().HasForeignKey(action => action.StaffId).OnDelete(DeleteBehavior.Restrict);
+        call.HasOne(action => action.Booking).WithMany().HasForeignKey(action => action.BookingId).OnDelete(DeleteBehavior.Restrict);
+        call.HasIndex(action => action.BookingId).IsUnique();
     }
 }

@@ -81,6 +81,23 @@ Apply the latest migration, then sign in as a provisioned Patient and select **B
 
 `POST /api/opd/bookings` takes a Firebase Bearer token and an `Idempotency-Key` header. A successful request returns HTTP 200 with `id`, `opdDate`, and `tokenNumber`. Repeat the same key as the same patient to retrieve the original booking, even after the OPD date changes. Each new key creates a booking. Token numbers start at 1 each day in Asia/Colombo.
 
+## Test the OPD staff queue
+
+Create a separate Email/Password account in the same Firebase project. After applying the latest EF migration, open `docker compose exec postgres psql -U mediflow -d mediflow` and provision the account using its Firebase Authentication UID.
+
+```sql
+INSERT INTO app_users (firebase_uid, role)
+VALUES ('your-staff-firebase-uid', 'OpdStaff');
+```
+
+1. Sign in as a Patient and book two tokens. Check that both appear in the Patient view.
+2. Sign out and sign in with the staff account. Check that today's queue is sorted by token number and shows the tokens as **Waiting**.
+3. Select **Call next**. Check that the lowest waiting token becomes **Called**, shows a Colombo call time, and appears as the last called token.
+4. Continue until every token is called, then select **Call next** again. The page should report that no tokens are waiting.
+5. In the browser Network tab, replay a successful call with the same Bearer token and `Idempotency-Key`. The response should match the original and the queue should stay unchanged.
+
+Staff routes are `GET /api/opd/queue` and `POST /api/opd/queue/call-next`. A call requires an `Idempotency-Key` and returns `{ "empty": true, "token": null }` when the queue has no waiting tokens. The API remembers empty results too. Use a new key for each new action.
+
 ## Build checks
 
 ```powershell

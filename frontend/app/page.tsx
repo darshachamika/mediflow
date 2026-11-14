@@ -3,6 +3,7 @@
 import { FirebaseError, getApps, initializeApp } from "firebase/app";
 import { browserSessionPersistence, getAuth, initializeAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from "firebase/auth";
 import { useEffect, useState, type FormEvent } from "react";
+import { OpdStaffQueue } from "./opd-staff-queue";
 
 type Profile = { id: number; firebaseUid: string; role: string };
 type Booking = { id: number; opdDate: string; tokenNumber: number };
@@ -194,6 +195,7 @@ export default function Home() {
               </section>
             </>
           )}
+          {profile?.role === "OpdStaff" && <OpdStaffQueue key={user.uid} user={user} apiUrl={apiUrl} />}
           <button type="button" disabled={busy} onClick={handleSignOut}>Sign out</button>
         </>
       ) : (

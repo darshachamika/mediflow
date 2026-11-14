@@ -29,7 +29,8 @@ builder.Services.AddAuthentication(FirebaseBearerHandler.SchemeName)
 builder.Services.AddAuthorizationBuilder()
     .AddPolicy("AppUser", policy => policy.RequireAuthenticatedUser()
         .RequireClaim(FirebaseBearerHandler.AppUserIdClaim))
-    .AddPolicy("Patient", policy => policy.RequireRole("Patient"));
+    .AddPolicy("Patient", policy => policy.RequireRole("Patient"))
+    .AddPolicy("OpdStaff", policy => policy.RequireRole("OpdStaff"));
 
 var app = builder.Build();
 
@@ -66,14 +67,51 @@ bookings.MapGet("", async (HttpResponse response, ClaimsPrincipal user,
 bookings.MapPost("", async (HttpRequest request, ClaimsPrincipal user,
     MediFlowDbContext db, CancellationToken cancellationToken) =>
 {
-    var keys = request.Headers["Idempotency-Key"];
-    var key = keys.Count == 1 ? keys[0]?.Trim() : null;
-    if (string.IsNullOrEmpty(key) || key.Length > 128 || key.Any(c => c < '!' || c > '~' || c == ','))
-        return Results.BadRequest(new { error = "Supply one Idempotency-Key of 1–128 visible ASCII characters without commas." });
+    var key = ReadIdempotencyKey(request);
+    if (key is null)
+        return InvalidIdempotencyKey();
 
     var patientId = int.Parse(user.FindFirstValue(FirebaseBearerHandler.AppUserIdClaim)!);
     var booking = await OpdBooking.CreateOrReplayAsync(db, patientId, key, cancellationToken);
     return Results.Ok(new { booking.Id, booking.OpdDate, booking.TokenNumber });
 });
 
+var queue = api.MapGroup("/opd/queue").RequireAuthorization("OpdStaff");
+queue.MapGet("", async (HttpResponse response, MediFlowDbContext db, CancellationToken cancellationToken) =>
+{
+    response.Headers.CacheControl = "no-store";
+    var today = OpdBooking.Today();
+    return await db.OpdBookings.AsNoTracking().Where(booking => booking.OpdDate == today)
+        .OrderBy(booking => booking.TokenNumber)
+        .Select(booking => new { booking.TokenNumber, booking.Status, booking.CalledAt })
+        .ToListAsync(cancellationToken);
+});
+
+queue.MapPost("/call-next", async (HttpRequest request, ClaimsPrincipal user,
+    MediFlowDbContext db, CancellationToken cancellationToken) =>
+{
+    var key = ReadIdempotencyKey(request);
+    if (key is null)
+        return InvalidIdempotencyKey();
+
+    var staffId = int.Parse(user.FindFirstValue(FirebaseBearerHandler.AppUserIdClaim)!);
+    var booking = await OpdCallAction.CallNextAsync(db, staffId, key, cancellationToken);
+    return Results.Ok(new
+    {
+        empty = booking is null,
+        token = booking is null ? null : new { booking.TokenNumber, booking.Status, booking.CalledAt, booking.OpdDate }
+    });
+});
+
 app.Run();
+
+static string? ReadIdempotencyKey(HttpRequest request)
+{
+    var keys = request.Headers["Idempotency-Key"];
+    var key = keys.Count == 1 ? keys[0]?.Trim() : null;
+    return string.IsNullOrEmpty(key) || key.Length > 128 || key.Any(c => c < '!' || c > '~' || c == ',')
+        ? null : key;
+}
+
+static IResult InvalidIdempotencyKey() =>
+    Results.BadRequest(new { error = "Supply one Idempotency-Key of 1–128 visible ASCII characters without commas." });
