@@ -21,6 +21,7 @@ export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) 
   const [completing, setCompleting] = useState<number | null>(null);
   const [message, setMessage] = useState("");
   const [revision, setRevision] = useState(0);
+  const [statusFilter, setStatusFilter] = useState<"All" | QueueToken["status"]>("All");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -100,6 +101,7 @@ export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) 
   for (const item of queue) {
     counts[item.status]++;
   }
+  const visibleRows = statusFilter === "All" ? queue : queue.filter((item) => item.status === statusFilter);
 
   return (
     <section aria-labelledby="staff-queue">
@@ -119,11 +121,20 @@ export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) 
               </div>
             ))}
           </dl>
-          {queue.length === 0 ? <p>No tokens booked today.</p> : (
+          <label>
+            Status{" "}
+            <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}>
+              <option>All</option>
+              {Object.keys(counts).map((status) => <option key={status}>{status}</option>)}
+            </select>
+          </label>
+          {visibleRows.length === 0 ? (
+            <p>{statusFilter === "All" ? "No tokens booked today." : `No tokens match the ${statusFilter} status.`}</p>
+          ) : (
             <table>
               <thead><tr><th scope="col">Token</th><th scope="col">Status</th><th scope="col">Called time</th><th scope="col">Action</th></tr></thead>
               <tbody>
-                {queue.map((item) => (
+                {visibleRows.map((item) => (
                   <tr key={item.id}>
                     <td>{item.tokenNumber}</td>
                     <td>{item.status}</td>
