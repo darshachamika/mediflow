@@ -1,32 +1,79 @@
 # MediFlow
 
-Local development requires Node.js 20.9 or later, the .NET 10 SDK, and Docker with Compose. Run each section from the repository root in a separate PowerShell terminal.
+Local development requires Node.js 20.9 or later, the .NET 10 SDK, Docker with Compose, and a Firebase project. Run commands from the repository root in PowerShell.
 
-## Frontend
+## Firebase
+
+In the Firebase console, enable the Email/Password sign-in provider, register a web app, and create a test user under Authentication → Users. Copy the user's UID for provisioning. Use the same Firebase project for the frontend and API.
+
+Copy the example file and fill in the public web app settings from Firebase.
 
 ```powershell
-npm.cmd --prefix frontend install
-npm.cmd --prefix frontend run dev
+Copy-Item frontend/.env.example frontend/.env.local
 ```
 
-Open [the frontend](http://localhost:3000).
+Keep the Firebase Admin service account JSON outside the repository. Set its absolute path and your Firebase project ID in the API terminal.
 
-## API
+```powershell
+$env:GOOGLE_APPLICATION_CREDENTIALS = 'C:\path\outside\the\repo\firebase-admin.json'
+$env:Firebase__ProjectId = 'your-firebase-project-id'
+$env:ASPNETCORE_ENVIRONMENT = 'Development'
+```
+
+The API uses Application Default Credentials. The frontend origin defaults to `http://localhost:3000`. Set `Frontend__Origin` in the API terminal if you use a different origin.
+
+## PostgreSQL and migrations
+
+```powershell
+docker compose up -d --wait postgres
+$apiProject = 'backend/MediFlow.Api'
+dotnet user-secrets set 'ConnectionStrings:MediFlow' 'Host=127.0.0.1;Port=5432;Database=mediflow;Username=mediflow;Password=mediflow_local_only' --project $apiProject
+dotnet tool install --global dotnet-ef --version 10.0.8
+dotnet ef database update --project $apiProject -- --environment Development
+```
+
+Install `dotnet-ef` once. After future model changes, generate a migration with `dotnet ef migrations add YourMigrationName --project $apiProject --output-dir Data/Migrations -- --environment Development`, review it, and run the update command again. The Compose password is a local development placeholder. Run `docker compose down` to stop PostgreSQL and retain its volume.
+
+## Start and verify sign-in
+
+Start the API in the terminal where you set its environment variables.
 
 ```powershell
 dotnet run --project backend/MediFlow.Api -- --urls http://localhost:5080
 ```
 
-From another terminal, run `Invoke-RestMethod http://localhost:5080/health`. The endpoint returns HTTP 200 with `{"status":"ok"}` when the API is running.
-
-## PostgreSQL
+Start the frontend in another terminal and open [MediFlow](http://localhost:3000).
 
 ```powershell
-docker compose up -d --wait postgres
-docker compose ps
+npm.cmd --prefix frontend ci
+npm.cmd --prefix frontend run dev
 ```
 
-Connect to `127.0.0.1:5432` using database and user `mediflow` and password `mediflow_local_only`. These are local development placeholders. Run `docker compose down` to stop the database and retain its data.
+Check the public health endpoint and the two unauthorized requests.
+
+```powershell
+curl.exe -i http://localhost:5080/health
+curl.exe -i http://localhost:5080/api/me
+curl.exe -i -H 'Authorization: Bearer invalid-token' http://localhost:5080/api/me
+```
+
+Expect HTTP 200 for health and HTTP 401 for both profile requests. Sign in through the frontend with the Firebase test user before provisioning it. In the browser's Network tab, check that `GET /api/me` returns HTTP 403.
+
+To provision that account, open a PostgreSQL shell.
+
+```powershell
+docker compose exec postgres psql -U mediflow -d mediflow
+```
+
+Replace the placeholder with the Firebase Authentication UID and run this SQL in `psql`.
+
+```sql
+INSERT INTO app_users (firebase_uid, role)
+VALUES ('your-firebase-user-uid', 'Patient')
+ON CONFLICT (firebase_uid) DO NOTHING;
+```
+
+Sign out and back in. Check that `GET /api/me` returns HTTP 200 with the account's own `id`, `firebaseUid`, and `role` of `Patient`. The database controls the role.
 
 ## Build checks
 
@@ -34,3 +81,5 @@ Connect to `127.0.0.1:5432` using database and user `mediflow` and password `med
 npm.cmd --prefix frontend run build
 dotnet build backend/MediFlow.Api
 ```
+
+If Next.js reports that the native Windows SWC binding is unavailable, append `-- --webpack` to the frontend dev or build command.

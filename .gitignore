@@ -6,3 +6,4 @@ bin/
 obj/
 .vs/
 .env*
+!.env.example
