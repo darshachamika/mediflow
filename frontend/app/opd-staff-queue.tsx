@@ -96,6 +96,10 @@ export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) 
 
   // Completed tokens still count toward the call history.
   const lastCalled = queue.findLast((item) => item.calledAt !== null);
+  const counts = { Waiting: 0, Called: 0, Completed: 0, Cancelled: 0 };
+  for (const item of queue) {
+    counts[item.status]++;
+  }
 
   return (
     <section aria-labelledby="staff-queue">
@@ -107,6 +111,14 @@ export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) 
       ) : (
         <>
           <p>{lastCalled ? `Last called token: ${lastCalled.tokenNumber}` : "No tokens called today."}</p>
+          <dl aria-label="Queue status counts">
+            {Object.entries(counts).map(([status, count]) => (
+              <div key={status}>
+                <dt>{status}</dt>
+                <dd>{count}</dd>
+              </div>
+            ))}
+          </dl>
           {queue.length === 0 ? <p>No tokens booked today.</p> : (
             <table>
               <thead><tr><th scope="col">Token</th><th scope="col">Status</th><th scope="col">Called time</th><th scope="col">Action</th></tr></thead>
