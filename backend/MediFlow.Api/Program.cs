@@ -40,8 +40,10 @@ builder.Services.AddAuthorizationBuilder()
     .AddPolicy("OpdStaff", policy => policy.RequireRole("OpdStaff"))
     .AddPolicy("Reception", policy => policy.RequireRole("Reception"))
     .AddPolicy("Doctor", policy => policy.RequireRole("Doctor"))
-    .AddPolicy("LabStaff", policy => policy.RequireRole("LabStaff"));
+    .AddPolicy("LabStaff", policy => policy.RequireRole("LabStaff"))
+    .AddPolicy("OpdAdmin", policy => policy.RequireRole("OpdAdmin"));
 builder.Services.AddSignalR();
+builder.Services.AddHostedService<OpdNotificationWorker>();
 
 var app = builder.Build();
 
@@ -56,6 +58,7 @@ app.MapHub<OpdDisplayHub>("/hubs/opd");
 var api = app.MapGroup("/api").RequireAuthorization("AppUser");
 api.MapDoctor(ReadIdempotencyKey);
 api.MapClinical();
+api.MapOpdAdministration();
 
 api.MapGet("/me", (ClaimsPrincipal user) => Results.Ok(new
 {

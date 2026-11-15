@@ -37,6 +37,7 @@ internal static class DoctorEndpoints
                 booking.RoomId = roomId;
                 booking.DoctorId = actor;
                 AddEvent(db, booking, actor, "Called");
+                OpdNotification.EnqueueCall(db, booking);
             }
             var call = new OpdRoomCall
             {

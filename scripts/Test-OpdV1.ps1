@@ -339,7 +339,8 @@ VALUES ((SELECT id FROM app_users WHERE firebase_uid='$($accounts[0].localId)'),
     Assert ((Read-Response (Send POST "$roomB/call-next" $doctorB 'clinical-patient-b')).Body.token.id -eq $secondVisit.id) 'Wrong second clinical visit.'
     $null = Read-Response (Send POST "$roomB/tokens/$($secondVisit.id)/start" $doctorB)
     $null = Read-Response (Send POST "$roomB/tokens/$($secondVisit.id)/complete" $doctorB)
-    $slot = (Read-Response (Send POST "$clinical/slots" $doctorB '' @{ startsAt = [DateTimeOffset]::UtcNow.Date.AddDays(2).ToString('o'); capacity = 1 })).Body
+    $slotStart = [DateTimeOffset]::Parse([DateTimeOffset]::UtcNow.AddHours(2).ToString("yyyy-MM-dd'T'HH:mm':00+00:00'"))
+    $slot = (Read-Response (Send POST "$clinical/slots" $doctorB '' @{ startsAt = $slotStart.ToString('o'); capacity = 1 })).Body
     $slotA = Send POST "$record/follow-up/$($slot.id)" $doctorB
     $slotB = Send POST "$clinical/visits/$($secondVisit.id)/follow-up/$($slot.id)" $doctorB
     $slotStatuses = @([int]$slotA.GetAwaiter().GetResult().StatusCode, [int]$slotB.GetAwaiter().GetResult().StatusCode)
@@ -348,6 +349,44 @@ VALUES ((SELECT id FROM app_users WHERE firebase_uid='$($accounts[0].localId)'),
     $appointmentsB = (Read-Response (Send GET "$clinical/me/appointments" $patientB)).Body
     Assert (($appointmentsA.Count + $appointmentsB.Count) -eq 1 -and $appointmentsA.Count -eq [int]($slotStatuses[0] -eq 200)) 'Appointment ownership mismatch.'
     'PASS consultation privacy, lab state machine and publication, appointment ownership and concurrent final-slot allocation'
+
+    $operations = '/api/opd/admin'
+    Read-Response (Send GET "$operations/counts") 401
+    Read-Response (Send GET "$operations/counts" $staff) 403
+    $department = (Read-Response (Send POST "$operations/departments" $admin '' @{ name = 'Synthetic OPD' })).Body
+    $room = (Read-Response (Send POST "$operations/rooms" $admin '' @{ name = 'Room C'; departmentId = $department.id })).Body
+    $doctorProfile = (Read-Response (Send GET '/api/me' $doctorA)).Body
+    Read-Response (Send POST "$operations/assignments" $admin '' @{ roomId = $room.id; doctorId = $doctorProfile.id; opdDate = $current }) 409
+    Read-Response (Send POST "$operations/assignments" $admin '' @{ roomId = 1; doctorId = $doctorProfile.id; opdDate = $past }) 400
+    $assignment = @{ roomId = $room.id; doctorId = $doctorProfile.id; opdDate = $future }
+    $newAssignment = Read-Response (Send POST "$operations/assignments" $admin '' $assignment)
+    Assert ((Read-Response (Send POST "$operations/assignments" $admin '' $assignment)).Raw -ceq $newAssignment.Raw) 'Assignment replay mismatch.'
+    $otherDoctor = (Read-Response (Send GET '/api/me' $doctorB)).Body
+    Read-Response (Send POST "$operations/assignments" $admin '' @{ roomId = $room.id; doctorId = $otherDoctor.id; opdDate = $future }) 409
+    $counts = (Read-Response (Send GET "$operations/counts" $admin)).Body
+    Assert ($counts.opdDate -eq $current -and ($counts.counts | Measure-Object -Property count -Sum).Sum -eq 6) 'Operational counts mismatch.'
+    $auditCount = docker exec $container psql -U postgres -tAc 'SELECT count(*) FROM opd_admin_events'
+    Assert ($auditCount.Trim() -eq '3') 'Admin audit should record only successful changes.'
+
+    $alerts = '/api/opd/notifications'
+    Read-Response (Send GET $alerts $lab) 403
+    $appointmentOwner = if ($slotStatuses[0] -eq 200) { $patientA } else { $patientB }
+    $otherOwner = if ($slotStatuses[0] -eq 200) { $patientB } else { $patientA }
+    $badOutbox = 'INSERT INTO opd_notification_outbox ("PatientId","Kind","DueAt","Attempts") VALUES ((SELECT min(id) FROM app_users),''Unsupported'',now(),4);'
+    $badOutbox | docker exec -i $container psql -U postgres -v ON_ERROR_STOP=1
+    for ($i=0; $i -lt 15; $i++) {
+        $delivered = (Read-Response (Send GET $alerts $appointmentOwner)).Body
+        $failed = 'SELECT count(*) FROM opd_notification_outbox WHERE "Kind"=''Unsupported'' AND "FailedAt" IS NOT NULL AND "Attempts"=5;' |
+            docker exec -i $container psql -U postgres -tA
+        if (@($delivered | Where-Object kind -eq 'AppointmentReminder').Count -eq 1 -and $failed.Trim() -eq '1') { break }
+        Start-Sleep -Seconds 1
+    }
+    Assert ($failed.Trim() -eq '1' -and @($delivered | Where-Object kind -eq 'AppointmentReminder').Count -eq 1) 'Outbox delivery/failure did not settle.'
+    Assert (@($delivered | Where-Object smsDelivery -ne 'Simulated').Count -eq 0) 'SMS must be labelled simulated.'
+    Assert (@((Read-Response (Send GET $alerts $otherOwner)).Body | Where-Object kind -eq 'AppointmentReminder').Count -eq 0) 'Reminder leaked to another patient.'
+    $callsForOwner = (Read-Response (Send GET $alerts $calledOwner)).Body
+    Assert (@($callsForOwner | Where-Object { $_.kind -eq 'TokenCalled' -and $_.tokenNumber -eq 2 }).Count -eq 1) 'Call replay produced duplicate or missing notification.'
+    'PASS admin permissions, room/doctor overlap, audit, outbox delivery, simulated SMS, retry cap and alert ownership'
 
     if ($Browser) {
         $env:NEXT_PUBLIC_FIREBASE_API_KEY = 'demo-api-key'

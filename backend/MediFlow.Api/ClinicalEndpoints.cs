@@ -155,6 +155,8 @@ internal static class ClinicalEndpoints
             if (slot.StartsAt <= DateTimeOffset.UtcNow || await appointments.CountAsync(ct) >= slot.Capacity) return Results.Conflict();
             appointment = new OpdAppointment { Slot = slot, PatientId = visit.PatientId!.Value, VisitId = visitId };
             db.Add(appointment);
+            db.Add(new OpdNotification { PatientId = appointment.PatientId, Kind = "AppointmentReminder",
+                AppointmentAt = slot.StartsAt, DueAt = slot.StartsAt.AddHours(-24) });
             await Save(db, tx, ct);
             return Results.Ok(Appointment(appointment));
         });

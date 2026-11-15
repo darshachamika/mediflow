@@ -30,6 +30,7 @@ public sealed class OpdCallAction
             // PostgreSQL stores microseconds. Return the same timestamp on the first call and on replay.
             var utcNow = DateTimeOffset.UtcNow;
             next.CalledAt = utcNow.AddTicks(-(utcNow.Ticks % 10));
+            OpdNotification.EnqueueCall(db, next);
         }
 
         db.OpdCallActions.Add(new OpdCallAction { StaffId = staffId, IdempotencyKey = key, Booking = next });

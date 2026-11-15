@@ -66,6 +66,24 @@ public sealed class MediFlowDbContext(DbContextOptions<MediFlowDbContext> option
         room.ToTable("opd_rooms");
         room.Property(item => item.Name).HasMaxLength(80);
         room.HasIndex(item => item.Name).IsUnique();
+        room.HasOne<OpdDepartment>().WithMany().HasForeignKey(item => item.DepartmentId).OnDelete(DeleteBehavior.Restrict);
+
+        var department = modelBuilder.Entity<OpdDepartment>();
+        department.ToTable("opd_departments");
+        department.Property(item => item.Name).HasMaxLength(80);
+        department.HasIndex(item => item.Name).IsUnique();
+
+        var adminEvent = modelBuilder.Entity<OpdAdminEvent>();
+        adminEvent.ToTable("opd_admin_events");
+        adminEvent.Property(item => item.Action).HasMaxLength(32);
+        adminEvent.Property(item => item.Subject).HasMaxLength(100);
+        adminEvent.HasOne<AppUser>().WithMany().HasForeignKey(item => item.ActorId).OnDelete(DeleteBehavior.Restrict);
+
+        var notification = modelBuilder.Entity<OpdNotification>();
+        notification.ToTable("opd_notification_outbox");
+        notification.Property(item => item.Kind).HasMaxLength(32);
+        notification.HasIndex(item => new { item.DueAt, item.Id }).HasFilter("\"DeliveredAt\" IS NULL AND \"FailedAt\" IS NULL");
+        notification.HasOne<AppUser>().WithMany().HasForeignKey(item => item.PatientId).OnDelete(DeleteBehavior.Restrict);
 
         var assignment = modelBuilder.Entity<OpdAssignment>();
         assignment.ToTable("opd_assignments");

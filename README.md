@@ -124,6 +124,12 @@ The assigned doctor requests a lab test using `POST /api/clinical/visits/{visitI
 
 Doctors create slots with `POST /api/clinical/slots` using a future ISO timestamp with an offset in `startsAt` and a positive `capacity`. To book a follow-up, use `POST /api/clinical/visits/{visitId}/follow-up/{slotId}`. Patients read their own published visit summaries, published lab results, and appointments at `GET /api/clinical/me/visits`, `GET /api/clinical/me/lab`, and `GET /api/clinical/me/appointments`.
 
+### Operations and notifications
+
+Provision an `OpdAdmin` profile to list or create departments, rooms, and daily doctor assignments under `/api/opd/admin`. Create a department with `{"name":"General OPD"}`, a room with `{"name":"Room 1","departmentId":1}`, and an assignment with `{"roomId":1,"doctorId":2,"opdDate":"YYYY-MM-DD"}`. `GET /api/opd/admin/counts` returns counts for today's queue. Room and doctor overlaps for the same date return 409. Successful changes are audited. The role has no clinical access.
+
+Patient calls and follow-up bookings write an outbox entry in the same database transaction. The worker makes delivered entries available at `GET /api/opd/notifications` for the owning patient. Appointment reminders become due 24 hours before the slot, or immediately for a closer slot. Every SMS in this implementation is simulated and recorded without a phone number or a provider call.
+
 ## Build checks
 
 ```powershell
