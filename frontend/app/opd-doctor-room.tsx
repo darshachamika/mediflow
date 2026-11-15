@@ -1,6 +1,7 @@
 import type { User } from "firebase/auth";
 import { useEffect, useState } from "react";
 import { opdRequest } from "./opd-request";
+import { DoctorClinical } from "./doctor-clinical";
 
 type Room = { id: number; name: string; opdDate: string };
 type ActiveToken = { id: number; tokenNumber: number; status: "Called" | "InConsultation" };
@@ -13,6 +14,7 @@ export function OpdDoctorRoom({ user, apiUrl }: { user: User; apiUrl: string }) 
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [refresh, setRefresh] = useState(0);
+  const [selectedVisit, setSelectedVisit] = useState<number | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -84,10 +86,14 @@ export function OpdDoctorRoom({ user, apiUrl }: { user: User; apiUrl: string }) 
           {!active && <button type="button" disabled={busy} onClick={() => void act("call-next")}>Call next in room</button>}
           {active?.status === "Called" && <button type="button" disabled={busy} onClick={() => void act("start")}>Start consultation</button>}
           {active?.status === "InConsultation" && <button type="button" disabled={busy} onClick={() => void act("complete")}>Complete consultation</button>}
+          {active?.status === "InConsultation" && (
+            <button type="button" onClick={() => setSelectedVisit(active.id)}>Open consultation</button>
+          )}
         </>
       ) : <p>No room is assigned to you for today.</p>}
       <button type="button" disabled={loading || busy} onClick={reload}>Refresh room</button>
       {message && <p role="status">{message}</p>}
+      <DoctorClinical user={user} apiUrl={apiUrl} revision={refresh} selectedId={selectedVisit} select={setSelectedVisit} />
     </section>
   );
 }

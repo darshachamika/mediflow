@@ -8,6 +8,8 @@ import { calledTime, todayOpdDate } from "./opd-time";
 import { OpdDatePicker } from "./opd-date-picker";
 import { OpdReception } from "./opd-reception";
 import { OpdDoctorRoom } from "./opd-doctor-room";
+import { ClinicalLab } from "./clinical-lab";
+import { PatientVisits } from "./patient-visits";
 import { opdRequest } from "./opd-request";
 import Link from "next/link";
 import QRCode from "qrcode";
@@ -325,6 +327,7 @@ export default function Home() {
           )}
           {profile?.role === "Patient" && (
             <>
+              <p><a href="#my-visits">My Visits</a></p>
               {viewingToday && <button type="button" disabled={busy} onClick={handleBooking}>Book OPD token</button>}
               {viewingToday && booking && <p role="status">Booked OPD token {booking.tokenNumber} for {booking.opdDate}</p>}
               <section aria-labelledby="today-tokens">
@@ -364,11 +367,13 @@ export default function Home() {
                   </ul>
                 ))}
               </section>
+              <PatientVisits key={user.uid} user={user} apiUrl={apiUrl} />
             </>
           )}
           {profile?.role === "OpdStaff" && <OpdStaffQueue key={user.uid} user={user} apiUrl={apiUrl} />}
           {profile?.role === "Reception" && <OpdReception key={user.uid} user={user} apiUrl={apiUrl} />}
           {profile?.role === "Doctor" && <OpdDoctorRoom key={user.uid} user={user} apiUrl={apiUrl} />}
+          {profile?.role === "LabStaff" && <ClinicalLab key={user.uid} user={user} apiUrl={apiUrl} />}
           <button type="button" disabled={busy} onClick={handleSignOut}>Sign out</button>
         </>
       ) : (

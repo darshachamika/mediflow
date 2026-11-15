@@ -132,6 +132,24 @@ The assigned doctor requests a lab test using `POST /api/clinical/visits/{visitI
 
 Doctors create slots with `POST /api/clinical/slots` using a future ISO timestamp with an offset in `startsAt` and a positive `capacity`. To book a follow-up, use `POST /api/clinical/visits/{visitId}/follow-up/{slotId}`. Patients read their own published visit summaries, published lab results, and appointments at `GET /api/clinical/me/visits`, `GET /api/clinical/me/lab`, and `GET /api/clinical/me/appointments`.
 
+#### Clinical browser demo
+
+Run the automated OPD and clinical checks together on the disposable PostgreSQL and Firebase fixtures.
+
+```powershell
+Set-Location D:\Mad\mediflow
+npm.cmd --prefix frontend ci
+pwsh -NoProfile -File scripts/Test-OpdV1.ps1 -BrowserTest -ClinicalBrowserTest
+```
+
+For a manual walkthrough, run `pwsh -NoProfile -File scripts/Test-OpdV1.ps1 -Browser` and open `http://localhost:3097` in separate browser sessions for each role. Use the emulator password printed by the fixture.
+
+1. As `patient-a@example.test`, book a token. As `reception@example.test`, check in that token.
+2. As `doctor-a@example.test`, call the token, start the consultation, and select **Open consultation**. Save private notes and a patient-facing summary. Request a synthetic lab test.
+3. As `lab@example.test`, refresh the worklist, enter a synthetic result, and verify it. Confirm that the result is still absent from the patient's **My Visits**.
+4. As the doctor, complete the consultation and publish the summary. Select **Refresh visit** before publishing the verified result. Schedule a follow-up using a future Sri Lanka date and time.
+5. Refresh **My Visits** as Patient A and confirm the summary, lab result, and upcoming appointment are visible. Sign in as `patient-b@example.test` and confirm Patient A's records are absent. The existing OPD date picker remains available above My Visits.
+
 ### Operations and notifications
 
 Provision an `OpdAdmin` profile to list or create departments, rooms, and daily doctor assignments under `/api/opd/admin`. Create a department with `{"name":"General OPD"}`, a room with `{"name":"Room 1","departmentId":1}`, and an assignment with `{"roomId":1,"doctorId":2,"opdDate":"YYYY-MM-DD"}`. `GET /api/opd/admin/counts` returns counts for today's queue. Room and doctor overlaps for the same date return 409. Successful changes are audited. The role has no clinical access.

@@ -14,6 +14,16 @@ internal static class ClinicalEndpoints
         var patient = api.MapGroup("/clinical/me").RequireAuthorization("Patient");
         var lab = api.MapGroup("/clinical/lab").RequireAuthorization("LabStaff");
 
+        doctor.MapGet("/visits", async (ClaimsPrincipal user, MediFlowDbContext db, CancellationToken ct) =>
+        {
+            var actor = ReceptionEndpoints.UserId(user);
+            return await CareVisits(db, actor).AsNoTracking()
+                .OrderBy(visit => visit.Status != OpdBooking.InConsultation)
+                .ThenByDescending(visit => visit.OpdDate).ThenByDescending(visit => visit.Id)
+                .Select(visit => new { visit.Id, visit.TokenNumber, visit.OpdDate, visit.Status, hasPatient = visit.PatientId != null })
+                .ToListAsync(ct);
+        });
+
         doctor.MapGet("/visits/{visitId:long}", async (long visitId, ClaimsPrincipal user, MediFlowDbContext db, CancellationToken ct) =>
         {
             if (!await HasCare(db, visitId, user, ct)) return Results.NotFound();
@@ -175,9 +185,12 @@ internal static class ClinicalEndpoints
     private static Task<bool> HasCare(MediFlowDbContext db, long visit, ClaimsPrincipal user, CancellationToken ct)
     {
         var doctor = ReceptionEndpoints.UserId(user);
-        return db.OpdBookings.AnyAsync(item => item.Id == visit && item.DoctorId == doctor &&
-            (item.Status == OpdBooking.InConsultation || item.Status == OpdBooking.Completed), ct);
+        return CareVisits(db, doctor).AnyAsync(item => item.Id == visit, ct);
     }
+
+    private static IQueryable<OpdBooking> CareVisits(MediFlowDbContext db, int doctor) =>
+        db.OpdBookings.Where(item => item.DoctorId == doctor &&
+            (item.Status == OpdBooking.InConsultation || item.Status == OpdBooking.Completed));
 
     private static bool Valid(string? value, int limit) => !string.IsNullOrWhiteSpace(value) && value.Length <= limit;
 

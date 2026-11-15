@@ -1,4 +1,4 @@
-param([switch]$Browser, [switch]$BrowserTest, [switch]$Upgrade, [switch]$Vector, [string]$VectorPackage)
+param([switch]$Browser, [switch]$BrowserTest, [switch]$ClinicalBrowserTest, [switch]$Upgrade, [switch]$Vector, [string]$VectorPackage)
 $ErrorActionPreference = 'Stop'
 if ($VectorPackage) {
     if (!$Vector) { throw '-VectorPackage requires -Vector.' }
@@ -466,7 +466,7 @@ VALUES ((SELECT id FROM app_users WHERE firebase_uid='$($accounts[0].localId)'),
     Assert (($assistantAppointments.items.id -join ',') -eq ($appointmentsA.id -join ',')) 'Assistant appointment ownership mismatch.'
     "PASS practical FAQ sources, fallback, role checks, personal-data isolation and retrieval mode $expectedRetrieval"
 
-    if ($Browser -or $BrowserTest) {
+    if ($Browser -or $BrowserTest -or $ClinicalBrowserTest) {
         $env:NEXT_PUBLIC_FIREBASE_API_KEY = 'demo-api-key'
         $env:NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN = 'demo-mediflow.firebaseapp.com'
         $env:NEXT_PUBLIC_FIREBASE_PROJECT_ID = $emulatorProject
@@ -482,8 +482,13 @@ VALUES ((SELECT id FROM app_users WHERE firebase_uid='$($accounts[0].localId)'),
         if ($BrowserTest) {
             node "$frontendDir/tests/opd-workflow.mjs" $frontendOrigin $apiUrl $password $past $empty
             Assert ($LASTEXITCODE -eq 0) 'OPD browser assertions failed.'
-        } else {
-            "Browser fixture ready at $frontendOrigin. Use patient-a@example.test, patient-b@example.test, doctor-a@example.test, staff@example.test or reception@example.test with password $password."
+        }
+        if ($ClinicalBrowserTest) {
+            node "$frontendDir/tests/clinical-workflows.mjs" $frontendOrigin $apiUrl $password
+            Assert ($LASTEXITCODE -eq 0) 'Clinical browser assertions failed.'
+        }
+        if ($Browser) {
+            "Browser fixture ready at $frontendOrigin. Use patient-a@example.test, patient-b@example.test, doctor-a@example.test, lab@example.test, staff@example.test or reception@example.test with password $password."
             "API: $apiUrl. Auth Emulator: $authUrl."
             "Populated date $past. Empty date $empty. Press Enter to clean up."
             $null = Read-Host

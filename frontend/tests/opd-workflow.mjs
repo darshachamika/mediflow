@@ -28,8 +28,12 @@ async function book(patient) {
   return { tokenNumber, qr };
 }
 
+function queueRows(patient) {
+  return patient.locator("section[aria-labelledby='today-tokens']").getByRole("listitem");
+}
+
 function tokenStatus(patient, number, status) {
-  return patient.getByRole("listitem").filter({
+  return queueRows(patient).filter({
     hasText: new RegExp(`^Token ${number} for .* · ${status}(?:\\s|$)`),
   }).waitFor({ timeout });
 }
@@ -138,19 +142,23 @@ try {
   await patient.bringToFront();
   const date = patient.getByLabel("Queue date");
   await date.fill(populatedDate);
-  await patient.getByRole("listitem").filter({ hasText: `Token 1 for ${populatedDate}` }).waitFor();
-  assert.equal(await patient.getByRole("listitem").count(), 1);
+  await queueRows(patient).filter({ hasText: `Token 1 for ${populatedDate}` }).waitFor();
+  assert.equal(await queueRows(patient).count(), 1);
   await date.fill(emptyDate);
   await patient.getByText("You have no OPD tokens for this date.", { exact: true }).waitFor();
   await patient.getByRole("button", { name: "Today", exact: true }).click();
   await tokenStatus(patient, online.tokenNumber, "Completed");
-  assert.equal(await patient.getByRole("listitem").filter({ hasText: new RegExp(`^Token ${walkIn} for `) }).count(), 0);
+  assert.equal(await queueRows(patient).filter({ hasText: new RegExp(`^Token ${walkIn} for `) }).count(), 0);
   const manual = await book(patient);
   await reception.getByLabel("Token number", { exact: true }).fill(String(manual.tokenNumber));
   await reception.getByRole("button", { name: "Find token" }).click();
   await reception.getByText(`Token ${manual.tokenNumber} · Booked`).waitFor();
   await reception.getByRole("button", { name: "Check in token", exact: true }).click();
   await reception.getByText(`Token ${manual.tokenNumber} · Waiting`, { exact: true }).waitFor();
+  await patient.bringToFront();
+  await tokenStatus(patient, manual.tokenNumber, "Waiting");
+  await patient.getByRole("button", { name: `Cancel token ${manual.tokenNumber}`, exact: true }).click();
+  await tokenStatus(patient, manual.tokenNumber, "Cancelled");
   console.log("PASS browser: populated and empty patient history, Completed on Today, walk-in isolation, manual lookup and check-in");
 } finally {
   await browser.close();
