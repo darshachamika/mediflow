@@ -79,7 +79,17 @@ Sign out and back in. Check that `GET /api/me` returns HTTP 200 with the account
 
 Apply the latest migration, then sign in as a provisioned Patient and select **Book OPD token**. The page shows the assigned number and OPD date. If the request fails, select the same button to retry with the same key.
 
-`POST /api/opd/bookings` takes a Firebase Bearer token and an `Idempotency-Key` header. A successful request returns HTTP 200 with `id`, `opdDate`, and `tokenNumber`. Repeat the same key as the same patient to retrieve the original booking, even after the OPD date changes. Each new key creates a booking. Token numbers start at 1 each day in Asia/Colombo.
+`POST /api/opd/bookings` takes a Firebase Bearer token and an `Idempotency-Key` header. It issues a **Booked** token. Repeat the same key as the same patient to retrieve the original token, even after the OPD date changes. Token numbers start at 1 each day in Asia/Colombo.
+
+### Reception check-in
+
+Provision a separate Firebase UID in `app_users` with role `Reception`. Patients can give reception their token number or request an opaque check-in code using `POST /api/opd/bookings/{id}/check-in-code`. The code is the QR payload, expires after 15 minutes, and is replaced when a new code is issued.
+
+- `GET /api/opd/reception/tokens/{number}` looks up a token for today.
+- `POST /api/opd/reception/check-in` accepts JSON `{"tokenNumber":12}` or `{"code":"<QR payload>"}` and moves a Booked token to Waiting. A retry returns its original check-in result. An expired unused QR returns 410.
+- `POST /api/opd/reception/walk-ins` requires an `Idempotency-Key` and returns a printable token number and OPD date. A walk-in enters Waiting directly.
+
+The migration leaves existing statuses and histories intact. Legacy Waiting tokens receive a synthetic entry time at the start of their Colombo service date, ordered by token number.
 
 ## Test the OPD staff queue
 
@@ -91,7 +101,7 @@ VALUES ('your-staff-firebase-uid', 'OpdStaff');
 ```
 
 1. Sign in as a Patient and book two tokens. Check that both appear in the Patient view.
-2. Sign out and sign in with the staff account. Check that today's queue is sorted by token number and shows the tokens as **Waiting**.
+2. Check in both tokens through the Reception API. Sign in as OPD staff and confirm the tokens appear as **Waiting**.
 3. Select **Call next**. Check that the lowest waiting token becomes **Called**, shows a Colombo call time, and appears as the last called token.
 4. Continue until every token is called, then select **Call next** again. The page should report that no tokens are waiting.
 5. In the browser Network tab, replay a successful call with the same Bearer token and `Idempotency-Key`. The response should match the original and the queue should stay unchanged.
@@ -109,12 +119,13 @@ If Next.js reports that the native Windows SWC binding is unavailable, append `-
 
 ## OPD v1 verification
 
-With Docker running, install the Firebase CLI and EF CLI if needed. The integration script starts Firebase Auth Emulator, applies migrations to a new PostgreSQL container on a random loopback port, and removes that test container when finished. It uses ports 9198 and 5093 for the emulator and API. The Compose database and its volume are untouched.
+With Docker running, install the Firebase CLI and EF CLI if needed. The integration script uses free loopback ports for Firebase Auth Emulator, the API, and disposable PostgreSQL. It removes the test container when finished. The Compose database and its volume are untouched. pgAdmin can connect to the normal local database at the configured host and port.
 
 ```powershell
 npm.cmd install --global firebase-tools
 dotnet tool install --global dotnet-ef --version 10.0.8
 pwsh -NoProfile -File scripts/Test-OpdV1.ps1
+pwsh -NoProfile -File scripts/Test-OpdV1.ps1 -Upgrade
 ```
 
 The suite checks server-side roles and ownership, booking replay and concurrent allocation, queue position, Call next replay and ordering, completion replay and timestamps, cancellation racing Call next, and both history response contracts. Patient history returns `{ opdDate, items }`. Staff history returns an array with `X-Opd-Date`. Dates use Asia/Colombo.

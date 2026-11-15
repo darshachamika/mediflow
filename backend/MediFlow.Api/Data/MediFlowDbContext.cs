@@ -21,6 +21,13 @@ public sealed class MediFlowDbContext(DbContextOptions<MediFlowDbContext> option
         booking.ToTable("opd_bookings");
         booking.Property(item => item.Id).HasColumnName("id");
         booking.Property(item => item.PatientId).HasColumnName("patient_id");
+        booking.Property(item => item.IssuedById).HasColumnName("issued_by_id");
+        booking.Property(item => item.QueueEnteredAt).HasColumnName("queue_entered_at");
+        booking.Property(item => item.CheckInHash).HasColumnName("check_in_hash").HasMaxLength(64);
+        booking.Property(item => item.CheckInExpiresAt).HasColumnName("check_in_expires_at");
+        booking.HasIndex(item => item.CheckInHash).IsUnique();
+        booking.HasIndex(item => new { item.IssuedById, item.IdempotencyKey }).IsUnique();
+        booking.HasOne<AppUser>().WithMany().HasForeignKey(item => item.IssuedById).OnDelete(DeleteBehavior.Restrict);
         booking.Property(item => item.IdempotencyKey).HasColumnName("idempotency_key").HasMaxLength(128);
         booking.Property(item => item.OpdDate).HasColumnName("opd_date");
         booking.Property(item => item.TokenNumber).HasColumnName("token_number");
@@ -30,6 +37,12 @@ public sealed class MediFlowDbContext(DbContextOptions<MediFlowDbContext> option
         booking.HasOne<AppUser>().WithMany().HasForeignKey(item => item.PatientId).OnDelete(DeleteBehavior.Restrict);
         booking.HasIndex(item => new { item.PatientId, item.IdempotencyKey }).IsUnique();
         booking.HasIndex(item => new { item.OpdDate, item.TokenNumber }).IsUnique();
+
+        var checkIn = modelBuilder.Entity<OpdCheckIn>();
+        checkIn.ToTable("opd_check_ins");
+        checkIn.HasKey(item => item.BookingId);
+        checkIn.HasOne(item => item.Booking).WithOne().HasForeignKey<OpdCheckIn>(item => item.BookingId);
+        checkIn.HasOne<AppUser>().WithMany().HasForeignKey(item => item.StaffId).OnDelete(DeleteBehavior.Restrict);
 
         var call = modelBuilder.Entity<OpdCallAction>();
         call.ToTable("opd_call_actions");

@@ -1,4 +1,4 @@
-param([switch]$Browser)
+param([switch]$Browser, [switch]$Upgrade)
 $ErrorActionPreference = 'Stop'
 
 $root = (Resolve-Path "$PSScriptRoot/..").Path
@@ -6,8 +6,18 @@ $runId = [guid]::NewGuid().ToString('N').Substring(0, 8)
 $container = "mediflow-v1-$runId"
 $scratch = Join-Path $root "backend/MediFlow.Api/obj/$container"
 $apiProject = Join-Path $root 'backend/MediFlow.Api'
-$apiUrl = 'http://127.0.0.1:5093'
-$authUrl = 'http://127.0.0.1:9198'
+function Get-TestPorts {
+    $listeners = foreach ($i in 1..4) {
+        $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+        $listener.Start()
+        $listener
+    }
+    try { $listeners | ForEach-Object { $_.LocalEndpoint.Port } }
+    finally { $listeners | ForEach-Object { $_.Stop() } }
+}
+$apiPort, $authPort, $hubPort, $logPort = Get-TestPorts
+$apiUrl = "http://127.0.0.1:$apiPort"
+$authUrl = "http://127.0.0.1:$authPort"
 $frontendOrigin = 'http://localhost:3097'
 $emulatorProject = 'demo-mediflow'
 $password = 'mediflow-emulator-only'
@@ -33,10 +43,13 @@ function Wait-Http([string]$uri, $process) {
     throw "Timed out waiting for $uri. See $scratch."
 }
 
-function Send([string]$method, [string]$route, [string]$token = '', [string]$key = '') {
+function Send([string]$method, [string]$route, [string]$token = '', [string]$key = '', $body = $null) {
     $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::new($method), "$apiUrl$route")
     if ($token) { $request.Headers.Add('Authorization', "Bearer $token") }
     if ($key) { $request.Headers.Add('Idempotency-Key', $key) }
+    if ($null -ne $body) {
+        $request.Content = [System.Net.Http.StringContent]::new(($body | ConvertTo-Json -Compress), [Text.Encoding]::UTF8, 'application/json')
+    }
     $request.Headers.Add('Origin', $frontendOrigin)
     $client.SendAsync($request)
 }
@@ -57,7 +70,8 @@ try {
     $firebaseCommand = Get-Command firebase.cmd
     $firebaseJs = Join-Path (Split-Path $firebaseCommand.Source) 'node_modules/firebase-tools/lib/bin/firebase.js'
     Assert (Test-Path -LiteralPath $firebaseJs) 'Install Firebase CLI with npm.cmd install -g firebase-tools.'
-    '{"emulators":{"auth":{"host":"127.0.0.1","port":9198},"ui":{"enabled":false},"hub":{"port":4498},"logging":{"port":4598}}}' |
+    @{ emulators = @{ auth = @{ host = '127.0.0.1'; port = $authPort }; ui = @{ enabled = $false }; hub = @{ port = $hubPort }; logging = @{ port = $logPort } } } |
+        ConvertTo-Json -Depth 5 |
         Set-Content "$scratch/firebase.json"
     '{"type":"authorized_user","client_id":"demo","client_secret":"demo","refresh_token":"demo"}' |
         Set-Content "$scratch/credentials.json"
@@ -82,26 +96,38 @@ try {
     $env:GOOGLE_APPLICATION_CREDENTIALS = "$scratch/credentials.json"
     $env:Frontend__Origin = $frontendOrigin
 
-    dotnet build $apiProject -c Release --nologo
+    dotnet build $apiProject -c Verification --nologo
     Assert ($LASTEXITCODE -eq 0) 'API build failed.'
-    dotnet ef database update --no-build --configuration Release --project $apiProject
+    if ($Upgrade) {
+        dotnet ef database update OpdTokenCompletion --no-build --configuration Verification --project $apiProject
+        Assert ($LASTEXITCODE -eq 0) 'Baseline migration failed.'
+        "INSERT INTO app_users(firebase_uid,role) VALUES ('legacy-fixture','Patient'); INSERT INTO opd_bookings(patient_id,idempotency_key,opd_date,token_number) VALUES (1,'legacy',(now() AT TIME ZONE 'Asia/Colombo')::date-10,12);" |
+            docker exec -i $container psql -U postgres -v ON_ERROR_STOP=1
+        Assert ($LASTEXITCODE -eq 0) 'Baseline seeding failed.'
+    }
+    dotnet ef database update --no-build --configuration Verification --project $apiProject
     Assert ($LASTEXITCODE -eq 0) 'Fresh database migration failed.'
+    if ($Upgrade) {
+        $preserved = docker exec $container psql -U postgres -tAc "SELECT count(*) FROM opd_bookings WHERE idempotency_key='legacy' AND token_number=12 AND status='Waiting' AND queue_entered_at IS NOT NULL"
+        Assert ($preserved.Trim() -eq '1') 'Upgrade did not preserve the legacy waiting booking.'
+        'PASS migration upgrade preserved legacy booking and supplied its queue entry time'
+    }
     Wait-Http $authUrl $emulator
-    $accounts = foreach ($name in 'patient-a', 'patient-b', 'staff', 'unprovisioned') {
+    $accounts = foreach ($name in 'patient-a', 'patient-b', 'staff', 'unprovisioned', 'reception') {
         $body = @{ email = "$name@example.test"; password = $password; returnSecureToken = $true } | ConvertTo-Json
         Invoke-RestMethod "$authUrl/identitytoolkit.googleapis.com/v1/accounts:signUp?key=demo" -Method Post -ContentType 'application/json' -Body $body
     }
-    $patientA, $patientB, $staff, $unknown = $accounts.idToken
+    $patientA, $patientB, $staff, $unknown, $reception = $accounts.idToken
     @"
 INSERT INTO app_users(firebase_uid,role) VALUES
-('$($accounts[0].localId)','Patient'),('$($accounts[1].localId)','Patient'),('$($accounts[2].localId)','OpdStaff');
+('$($accounts[0].localId)','Patient'),('$($accounts[1].localId)','Patient'),('$($accounts[2].localId)','OpdStaff'),('$($accounts[4].localId)','Reception');
 INSERT INTO opd_bookings(patient_id,idempotency_key,opd_date,token_number,status,called_at)
-VALUES (1,'history-a',(now() AT TIME ZONE 'Asia/Colombo')::date-1,1,'Called',now()-interval '1 day'),
-       (2,'history-b',(now() AT TIME ZONE 'Asia/Colombo')::date-1,2,'Waiting',NULL);
+VALUES ((SELECT id FROM app_users WHERE firebase_uid='$($accounts[0].localId)'),'history-a',(now() AT TIME ZONE 'Asia/Colombo')::date-1,1,'Called',now()-interval '1 day'),
+       ((SELECT id FROM app_users WHERE firebase_uid='$($accounts[1].localId)'),'history-b',(now() AT TIME ZONE 'Asia/Colombo')::date-1,2,'Waiting',NULL);
 "@ | docker exec -i $container psql -U postgres -v ON_ERROR_STOP=1
     Assert ($LASTEXITCODE -eq 0) 'Test data setup failed.'
 
-    $api = Start-Process dotnet -ArgumentList 'bin/Release/net10.0/MediFlow.Api.dll','--urls',$apiUrl `
+    $api = Start-Process dotnet -ArgumentList 'bin/Verification/net10.0/MediFlow.Api.dll','--urls',$apiUrl `
         -WorkingDirectory $apiProject -WindowStyle Hidden -PassThru -RedirectStandardOutput "$scratch/api.out" -RedirectStandardError "$scratch/api.err"
     Wait-Http "$apiUrl/health" $api
     $client = [System.Net.Http.HttpClient]::new()
@@ -142,6 +168,23 @@ VALUES (1,'history-a',(now() AT TIME ZONE 'Asia/Colombo')::date-1,1,'Called',now
     $bRequest = Send POST $bookings $patientB 'distinct-b'
     $secondA = (Read-Response $aRequest).Body
     $secondB = (Read-Response $bRequest).Body
+    Assert ((Read-Response (Send POST $callNext $staff 'before-check-in')).Body.empty) 'Booked tokens must not be called.'
+    $checkIn = '/api/opd/reception/check-in'
+    Read-Response (Send POST $checkIn $patientA '' @{ tokenNumber = $first.Body.tokenNumber }) 403
+    Read-Response (Send POST "$bookings/$firstId/check-in-code" $patientB) 404
+    $qr = (Read-Response (Send POST "$bookings/$firstId/check-in-code" $patientA)).Body.code
+    "UPDATE opd_bookings SET check_in_expires_at = now() - interval '1 minute' WHERE id = $firstId;" | docker exec -i $container psql -U postgres -v ON_ERROR_STOP=1
+    Read-Response (Send POST $checkIn $reception '' @{ code = $qr }) 410
+    $qr = (Read-Response (Send POST "$bookings/$firstId/check-in-code" $patientA)).Body.code
+    $scanA = Send POST $checkIn $reception '' @{ code = $qr }
+    $scanB = Send POST $checkIn $reception '' @{ code = $qr }
+    $scan = Read-Response $scanA
+    Assert ($scan.Body.status -eq 'Waiting' -and (Read-Response $scanB).Raw -ceq $scan.Raw) 'Concurrent QR check-in did not replay.'
+    $eventCount = docker exec $container psql -U postgres -tAc 'SELECT count(*) FROM opd_check_ins'
+    Assert ($eventCount.Trim() -eq '1') 'Expected one check-in event.'
+    foreach ($bookingToCheckIn in @($secondA, $secondB) | Sort-Object tokenNumber) {
+        $null = Read-Response (Send POST $checkIn $reception '' @{ tokenNumber = $bookingToCheckIn.tokenNumber })
+    }
     $initial = (Read-Response (Send GET $queue $staff)).Body
     Assert (($initial.tokenNumber -join ',') -eq '1,2,3') 'Expected three unique sequential tokens.'
     Read-Response (Send POST "$bookings/$firstId/cancel" $patientB) 404
@@ -202,6 +245,13 @@ VALUES (1,'history-a',(now() AT TIME ZONE 'Asia/Colombo')::date-1,1,'Called',now
     Assert ((Read-Response (Send GET "${queue}?date=$empty" $staff)).Raw -eq '[]') 'Staff empty history mismatch.'
     Read-Response (Send POST "$queue/$($history.Body[0].id)/complete" $staff) 404
     'PASS Patient and Staff populated and empty history, date contracts, read-only history and return to Today'
+    $walkIn = Send POST '/api/opd/reception/walk-ins' $reception 'walk-in'
+    $walkInRetry = Send POST '/api/opd/reception/walk-ins' $reception 'walk-in'
+    $issued = Read-Response $walkIn
+    Assert ((Read-Response $walkInRetry).Raw -ceq $issued.Raw) 'Walk-in retry changed the token.'
+    $lookup = (Read-Response (Send GET "/api/opd/reception/tokens/$($issued.Body.tokenNumber)" $reception)).Body
+    Assert ($lookup.status -eq 'Waiting') 'Walk-in must enter Waiting directly.'
+    'PASS reception authorization, expired QR, concurrent check-in, manual check-in and walk-in replay'
 
     if ($Browser) {
         $env:NEXT_PUBLIC_FIREBASE_API_KEY = 'demo-api-key'

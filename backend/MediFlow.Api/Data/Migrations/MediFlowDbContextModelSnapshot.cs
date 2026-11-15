@@ -65,6 +65,15 @@ namespace MediFlow.Api.Data.Migrations
                         .HasColumnType("timestamp(6) with time zone")
                         .HasColumnName("called_at");
 
+                    b.Property<DateTimeOffset?>("CheckInExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("check_in_expires_at");
+
+                    b.Property<string>("CheckInHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("check_in_hash");
+
                     b.Property<DateTimeOffset?>("CompletedAt")
                         .HasPrecision(6)
                         .HasColumnType("timestamp(6) with time zone")
@@ -76,13 +85,21 @@ namespace MediFlow.Api.Data.Migrations
                         .HasColumnType("character varying(128)")
                         .HasColumnName("idempotency_key");
 
+                    b.Property<int?>("IssuedById")
+                        .HasColumnType("integer")
+                        .HasColumnName("issued_by_id");
+
                     b.Property<DateOnly>("OpdDate")
                         .HasColumnType("date")
                         .HasColumnName("opd_date");
 
-                    b.Property<int>("PatientId")
+                    b.Property<int?>("PatientId")
                         .HasColumnType("integer")
                         .HasColumnName("patient_id");
+
+                    b.Property<DateTimeOffset?>("QueueEnteredAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("queue_entered_at");
 
                     b.Property<string>("Status")
                         .IsRequired()
@@ -97,6 +114,12 @@ namespace MediFlow.Api.Data.Migrations
                         .HasColumnName("token_number");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("CheckInHash")
+                        .IsUnique();
+
+                    b.HasIndex("IssuedById", "IdempotencyKey")
+                        .IsUnique();
 
                     b.HasIndex("OpdDate", "TokenNumber")
                         .IsUnique();
@@ -130,13 +153,39 @@ namespace MediFlow.Api.Data.Migrations
                     b.ToTable("opd_call_actions", (string)null);
                 });
 
+            modelBuilder.Entity("MediFlow.Api.Data.OpdCheckIn", b =>
+                {
+                    b.Property<long>("BookingId")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTimeOffset>("JoinedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Method")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("StaffId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("BookingId");
+
+                    b.HasIndex("StaffId");
+
+                    b.ToTable("opd_check_ins", (string)null);
+                });
+
             modelBuilder.Entity("MediFlow.Api.Data.OpdBooking", b =>
                 {
                     b.HasOne("MediFlow.Api.Data.AppUser", null)
                         .WithMany()
+                        .HasForeignKey("IssuedById")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("MediFlow.Api.Data.AppUser", null)
+                        .WithMany()
                         .HasForeignKey("PatientId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("MediFlow.Api.Data.OpdCallAction", b =>
@@ -145,6 +194,23 @@ namespace MediFlow.Api.Data.Migrations
                         .WithMany()
                         .HasForeignKey("BookingId")
                         .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("MediFlow.Api.Data.AppUser", null)
+                        .WithMany()
+                        .HasForeignKey("StaffId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Booking");
+                });
+
+            modelBuilder.Entity("MediFlow.Api.Data.OpdCheckIn", b =>
+                {
+                    b.HasOne("MediFlow.Api.Data.OpdBooking", "Booking")
+                        .WithOne()
+                        .HasForeignKey("MediFlow.Api.Data.OpdCheckIn", "BookingId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
 
                     b.HasOne("MediFlow.Api.Data.AppUser", null)
                         .WithMany()

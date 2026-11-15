@@ -1,4 +1,5 @@
 using FirebaseAdmin;
+using MediFlow.Api;
 using Google.Apis.Auth.OAuth2;
 using MediFlow.Api.Auth;
 using MediFlow.Api.Data;
@@ -25,7 +26,7 @@ builder.Services.AddSingleton(_ => FirebaseApp.Create(new AppOptions
 builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
     policy.WithOrigins(builder.Configuration["Frontend:Origin"]!)
         .WithMethods("GET", "POST")
-        .WithHeaders("Authorization", "Idempotency-Key")
+        .WithHeaders("Authorization", "Idempotency-Key", "Content-Type")
         .WithExposedHeaders("X-Opd-Date")));
 
 builder.Services.AddAuthentication(FirebaseBearerHandler.SchemeName)
@@ -36,7 +37,8 @@ builder.Services.AddAuthorizationBuilder()
     .AddPolicy("AppUser", policy => policy.RequireAuthenticatedUser()
         .RequireClaim(FirebaseBearerHandler.AppUserIdClaim))
     .AddPolicy("Patient", policy => policy.RequireRole("Patient"))
-    .AddPolicy("OpdStaff", policy => policy.RequireRole("OpdStaff"));
+    .AddPolicy("OpdStaff", policy => policy.RequireRole("OpdStaff"))
+    .AddPolicy("Reception", policy => policy.RequireRole("Reception"));
 
 var app = builder.Build();
 
@@ -56,6 +58,7 @@ api.MapGet("/me", (ClaimsPrincipal user) => Results.Ok(new
 }));
 
 var bookings = api.MapGroup("/opd/bookings").RequireAuthorization("Patient");
+api.MapReception(bookings, ReadIdempotencyKey);
 
 bookings.MapGet("", async (
     HttpRequest request, HttpResponse response, ClaimsPrincipal user,
@@ -131,10 +134,10 @@ bookings.MapPost("/{bookingId:long}/cancel", async (
     if (booking is null)
         return Results.NotFound(new { error = "Booking was not found in today's bookings." });
 
-    if (booking.Status != OpdBooking.Waiting && booking.Status != OpdBooking.Cancelled)
-        return Results.Conflict(new { error = "Only waiting tokens can be cancelled." });
+    if (booking.Status is not (OpdBooking.Booked or OpdBooking.Waiting or OpdBooking.Cancelled))
+        return Results.Conflict(new { error = "Only booked or waiting tokens can be cancelled." });
 
-    if (booking.Status == OpdBooking.Waiting)
+    if (booking.Status is OpdBooking.Waiting or OpdBooking.Booked)
     {
         booking.Status = OpdBooking.Cancelled;
         await db.SaveChangesAsync(cancellationToken);

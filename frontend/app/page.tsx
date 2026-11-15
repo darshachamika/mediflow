@@ -10,7 +10,7 @@ import { OpdDatePicker } from "./opd-date-picker";
 type Profile = { id: number; firebaseUid: string; role: string };
 type Booking = { id: number; opdDate: string; tokenNumber: number };
 type PatientToken = Booking & {
-  status: "Waiting" | "Called" | "Completed" | "Cancelled";
+  status: "Booked" | "Waiting" | "Called" | "Completed" | "Cancelled";
   calledAt: string | null;
   waitingAhead: number | null;
 };
@@ -43,6 +43,7 @@ export default function Home() {
   const [authReady, setAuthReady] = useState(!firebaseConfigured);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [checkInCode, setCheckInCode] = useState<{ code: string; expiresAt: string } | null>(null);
 
   useEffect(() => {
     if (!firebaseConfigured) return;
@@ -60,6 +61,7 @@ export default function Home() {
       setAuthReady(true);
       setProfile(null);
       setBooking(null);
+      setCheckInCode(null);
       abortTokens.current?.abort();
       setTokenSnapshot(null);
       setTokenFailure(null);
@@ -181,6 +183,7 @@ export default function Home() {
     setTokenSnapshot(null);
     setTokenFailure(null);
     setBooking(null);
+    setCheckInCode(null);
     setMessage("");
   }
 
@@ -246,6 +249,26 @@ export default function Home() {
     }
   }
 
+  async function prepareCheckIn(item: PatientToken) {
+    if (!patient || !viewingToday || busy) return;
+    setBusy(true);
+    setCheckInCode(null);
+    setMessage("");
+    try {
+      const token = await patient.getIdToken();
+      const response = await fetch(`${apiUrl}/api/opd/bookings/${item.id}/check-in-code`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) throw new Error("Check-in code request failed");
+      setCheckInCode(await response.json());
+    } catch {
+      setMessage("Could not get a check-in code. You can give reception your token number.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleCancel(item: PatientToken) {
     if (!patient || !viewingToday || busy) return;
 
@@ -264,6 +287,7 @@ export default function Home() {
         return;
       }
       setMessage(`Cancelled token ${item.tokenNumber}.`);
+      setCheckInCode(null);
       refreshTokens.current?.();
     } catch {
       setMessage(`Could not confirm cancellation of token ${item.tokenNumber}. Try again.`);
@@ -292,6 +316,7 @@ export default function Home() {
             <>
               {viewingToday && <button type="button" disabled={busy} onClick={handleBooking}>Book OPD token</button>}
               {viewingToday && booking && <p role="status">Booked OPD token {booking.tokenNumber} for {booking.opdDate}</p>}
+              {viewingToday && checkInCode && <p>Check-in code <code>{checkInCode.code}</code> expires at {calledTime.format(new Date(checkInCode.expiresAt))}.</p>}
               <section aria-labelledby="today-tokens">
                 <h2 id="today-tokens">{viewingToday ? "Today’s OPD tokens" : `OPD tokens for ${selectedDate}`}</h2>
                 <OpdDatePicker date={selectedDate} today={today} disabled={busy} onSelect={selectDate} />
@@ -310,7 +335,10 @@ export default function Home() {
                         {item.calledAt && (
                           <> at <time dateTime={item.calledAt}>{calledTime.format(new Date(item.calledAt))}</time></>
                         )}
-                        {viewingToday && item.status === "Waiting" && (
+                        {viewingToday && item.status === "Booked" && (
+                          <> <button type="button" disabled={busy} onClick={() => void prepareCheckIn(item)}>Get check-in code</button></>
+                        )}
+                        {viewingToday && (item.status === "Waiting" || item.status === "Booked") && (
                           <> <button type="button" disabled={busy} aria-label={`Cancel token ${item.tokenNumber}`}
                             onClick={() => void handleCancel(item)}>Cancel</button></>
                         )}
