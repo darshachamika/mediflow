@@ -9,6 +9,9 @@ using System.Globalization;
 using System.Security.Claims;
 
 var builder = WebApplication.CreateBuilder(args);
+if (!builder.Environment.IsDevelopment()
+    && !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("FIREBASE_AUTH_EMULATOR_HOST")))
+    throw new InvalidOperationException("Firebase Auth Emulator is only supported in Development.");
 
 builder.Services.AddDbContext<MediFlowDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("MediFlow")));

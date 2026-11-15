@@ -1,7 +1,7 @@
 "use client";
 
 import { FirebaseError, getApps, initializeApp } from "firebase/app";
-import { browserSessionPersistence, getAuth, initializeAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from "firebase/auth";
+import { browserSessionPersistence, connectAuthEmulator, getAuth, initializeAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from "firebase/auth";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { OpdStaffQueue } from "./opd-staff-queue";
 import { calledTime, todayOpdDate } from "./opd-time";
@@ -24,6 +24,13 @@ const firebaseConfig = {
 const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5080";
 const firebaseConfigured = Object.values(firebaseConfig).every(Boolean);
 
+function initializePatientAuth() {
+  const auth = initializeAuth(initializeApp(firebaseConfig), { persistence: browserSessionPersistence });
+  const emulatorUrl = process.env.NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_URL;
+  if (emulatorUrl) connectAuthEmulator(auth, emulatorUrl);
+  return auth;
+}
+
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -42,7 +49,7 @@ export default function Home() {
 
     const auth = getApps().length
       ? getAuth()
-      : initializeAuth(initializeApp(firebaseConfig), { persistence: browserSessionPersistence });
+      : initializePatientAuth();
     let pending: AbortController | undefined;
     const unsubscribe = onAuthStateChanged(auth, async (signedInUser) => {
       pending?.abort();

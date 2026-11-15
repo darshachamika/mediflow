@@ -25,6 +25,9 @@ public sealed partial class FirebaseBearerHandler(
     [GeneratedRegex(@"\A[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\z")]
     private static partial Regex TokenFormat();
 
+    [GeneratedRegex(@"\A[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.\z")]
+    private static partial Regex EmulatorTokenFormat();
+
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
         if (!Request.Headers.TryGetValue("Authorization", out var header))
@@ -33,7 +36,9 @@ public sealed partial class FirebaseBearerHandler(
         if (header.Count != 1 || !AuthenticationHeaderValue.TryParse(header[0], out var authorization)
             || !SchemeName.Equals(authorization.Scheme, StringComparison.OrdinalIgnoreCase)
             || string.IsNullOrWhiteSpace(authorization.Parameter)
-            || !TokenFormat().IsMatch(authorization.Parameter))
+            || !(TokenFormat().IsMatch(authorization.Parameter)
+                || (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("FIREBASE_AUTH_EMULATOR_HOST"))
+                    && EmulatorTokenFormat().IsMatch(authorization.Parameter))))
             return AuthenticateResult.Fail("Invalid Bearer header.");
 
         FirebaseToken token;

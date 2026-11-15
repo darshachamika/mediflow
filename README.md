@@ -1,6 +1,6 @@
 # MediFlow
 
-Local development requires Node.js 20.9 or later, the .NET 10 SDK, Docker with Compose, and a Firebase project. Run commands from the repository root in PowerShell.
+Local development requires Node.js 20.9 or later, the .NET 10 SDK, Docker with Compose, and either a Firebase project or the local Auth Emulator. Run commands from the repository root in PowerShell 7.
 
 ## Firebase
 
@@ -27,7 +27,7 @@ The API uses Application Default Credentials. The frontend origin defaults to `h
 ```powershell
 docker compose up -d --wait postgres
 $apiProject = 'backend/MediFlow.Api'
-dotnet user-secrets set 'ConnectionStrings:MediFlow' 'Host=127.0.0.1;Port=5432;Database=mediflow;Username=mediflow;Password=mediflow_local_only' --project $apiProject
+dotnet user-secrets set 'ConnectionStrings:MediFlow' 'Host=127.0.0.1;Port=5433;Database=mediflow;Username=mediflow;Password=mediflow_local_only' --project $apiProject
 dotnet tool install --global dotnet-ef --version 10.0.8
 dotnet ef database update --project $apiProject -- --environment Development
 ```
@@ -106,3 +106,27 @@ dotnet build backend/MediFlow.Api
 ```
 
 If Next.js reports that the native Windows SWC binding is unavailable, append `-- --webpack` to the frontend dev or build command.
+
+## OPD v1 verification
+
+With Docker running, install the Firebase CLI and EF CLI if needed. The integration script starts Firebase Auth Emulator, applies migrations to a new PostgreSQL container on a random loopback port, and removes that test container when finished. It uses ports 9198 and 5093 for the emulator and API. The Compose database and its volume are untouched.
+
+```powershell
+npm.cmd install --global firebase-tools
+dotnet tool install --global dotnet-ef --version 10.0.8
+pwsh -NoProfile -File scripts/Test-OpdV1.ps1
+```
+
+The suite checks server-side roles and ownership, booking replay and concurrent allocation, queue position, Call next replay and ordering, completion replay and timestamps, cancellation racing Call next, and both history response contracts. Patient history returns `{ opdDate, items }`. Staff history returns an array with `X-Opd-Date`. Dates use Asia/Colombo.
+
+For browser verification, use the same fixture in a PowerShell terminal. Port 3097 must be available. The script prints the test dates and the credentials for its disposable emulator accounts.
+
+```powershell
+npm.cmd --prefix frontend ci
+pwsh -NoProfile -File scripts/Test-OpdV1.ps1 -Browser
+```
+
+1. Open `http://localhost:3097` as `patient-a@example.test`. Select the populated history date and confirm only token 1 appears. Select the empty date and confirm the empty message. Select **Today** and confirm token rows return and requests resume every 10 seconds while visible.
+2. Book two tokens, note the token numbers, and cancel the higher Waiting token. Open a separate browser session as `staff@example.test`. Select **Call next** until staff calls the lower token, then select **Complete** for that token. Confirm the Patient view shows both changes after polling.
+3. In the staff view, select the populated date and verify token order, then select the empty date and verify four zero counts. Return to **Today** and verify the live queue. Sign in separately as `patient-b@example.test` and verify only that patient's history is visible.
+4. Press Enter in the fixture terminal to clean up. Rebuild the frontend with its normal Firebase configuration before starting a production build from the same directory.
