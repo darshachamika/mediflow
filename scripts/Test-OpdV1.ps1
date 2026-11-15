@@ -11,7 +11,7 @@ $container = "mediflow-v1-$runId"
 $scratch = Join-Path $root "backend/MediFlow.Api/obj/$container"
 $apiProject = Join-Path $root 'backend/MediFlow.Api'
 function Get-TestPorts {
-    $listeners = foreach ($i in 1..4) {
+    $listeners = foreach ($i in 1..5) {
         $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
         $listener.Start()
         $listener
@@ -19,10 +19,11 @@ function Get-TestPorts {
     try { $listeners | ForEach-Object { $_.LocalEndpoint.Port } }
     finally { $listeners | ForEach-Object { $_.Stop() } }
 }
-$apiPort, $authPort, $hubPort, $logPort = Get-TestPorts
+$apiPort, $authPort, $hubPort, $logPort, $browserPort = Get-TestPorts
 $apiUrl = "http://127.0.0.1:$apiPort"
 $authUrl = "http://127.0.0.1:$authPort"
-$frontendOrigin = 'http://localhost:3097'
+$frontendPort = if ($Browser) { 3097 } else { $browserPort }
+$frontendOrigin = "http://localhost:$frontendPort"
 $emulatorProject = 'demo-mediflow'
 $password = 'mediflow-emulator-only'
 $environmentNames = @('ASPNETCORE_ENVIRONMENT', 'DOTNET_ENVIRONMENT', 'FIREBASE_AUTH_EMULATOR_HOST',
@@ -41,8 +42,8 @@ function Wait-Http([string]$uri, $process) {
     for ($attempt = 0; $attempt -lt 60; $attempt++) {
         if ($process.HasExited) { throw "Process exited before $uri became available. See $scratch." }
         try {
-            $null = Invoke-WebRequest $uri -TimeoutSec 2 -SkipHttpErrorCheck
-            return
+            $response = Invoke-WebRequest $uri -TimeoutSec 2 -SkipHttpErrorCheck
+            if ($response.StatusCode -eq 200 -and !$process.HasExited) { return }
         } catch { Start-Sleep -Seconds 1 }
     }
     throw "Timed out waiting for $uri. See $scratch."
@@ -476,7 +477,7 @@ VALUES ((SELECT id FROM app_users WHERE firebase_uid='$($accounts[0].localId)'),
         $frontendDir = Join-Path $root 'frontend'
         npm.cmd --prefix $frontendDir run build
         Assert ($LASTEXITCODE -eq 0) 'Browser fixture frontend build failed.'
-        $frontend = Start-Process node -ArgumentList 'node_modules/next/dist/bin/next','start','--port','3097' `
+        $frontend = Start-Process node -ArgumentList 'node_modules/next/dist/bin/next','start','--port',$frontendPort `
             -WorkingDirectory $frontendDir -WindowStyle Hidden -PassThru -RedirectStandardOutput "$scratch/frontend.out" -RedirectStandardError "$scratch/frontend.err"
         Wait-Http $frontendOrigin $frontend
         if ($BrowserTest) {
