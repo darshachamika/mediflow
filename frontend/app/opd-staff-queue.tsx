@@ -1,6 +1,6 @@
 import type { User } from "firebase/auth";
 import { useEffect, useRef, useState } from "react";
-import { calledTime } from "./opd-time";
+import { calledTime, todayOpdDate } from "./opd-time";
 
 type QueueToken = {
   id: number;
@@ -12,26 +12,33 @@ type QueueToken = {
 type CallResult =
   | { empty: true; token: null }
   | { empty: false; token: { tokenNumber: number; opdDate: string } };
+type QueueSnapshot = { date: string; rows: QueueToken[] };
 
 export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) {
-  const [loadedQueue, setQueue] = useState<QueueToken[] | null>(null);
-  const [loadError, setLoadError] = useState(false);
+  const [snapshot, setSnapshot] = useState<QueueSnapshot | null>(null);
+  const [failedDate, setFailedDate] = useState<string | null>(null);
   const [calling, setCalling] = useState(false);
   const [completing, setCompleting] = useState<number | null>(null);
   const [message, setMessage] = useState("");
   const refreshAfterAction = useRef<(() => void) | null>(null);
   const [statusFilter, setStatusFilter] = useState<"All" | QueueToken["status"]>("All");
   const [tokenSearch, setTokenSearch] = useState("");
+  const [historyDate, setHistoryDate] = useState<string | null>(null);
+  const abortQueue = useRef<AbortController | null>(null);
+  const today = todayOpdDate();
+  const viewingToday = historyDate === null;
+  const selectedDate = historyDate ?? today;
 
   useEffect(() => {
     const controller = new AbortController();
+    abortQueue.current = controller;
     const { signal } = controller;
     let inFlight = false;
     let refreshPending = false;
     let revision = 0;
 
     async function loadQueue(queueIfBusy = false) {
-      if (signal.aborted || document.visibilityState !== "visible") return;
+      if (signal.aborted || (historyDate === null && document.visibilityState !== "visible")) return;
       if (inFlight) {
         refreshPending ||= queueIfBusy;
         return;
@@ -42,19 +49,23 @@ export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) 
       try {
         const token = await user.getIdToken();
         if (signal.aborted) return;
-        const response = await fetch(`${apiUrl}/api/opd/queue`, {
+        const query = `?date=${encodeURIComponent(selectedDate)}`;
+        const response = await fetch(`${apiUrl}/api/opd/queue${query}`, {
           headers: { Authorization: `Bearer ${token}` },
           cache: "no-store",
           signal,
         });
         if (!response.ok) throw new Error("Queue request failed");
+        if (response.headers.get("X-Opd-Date") !== selectedDate) {
+          throw new Error("Queue response date does not match the requested date");
+        }
         const items: QueueToken[] = await response.json();
         if (!signal.aborted && requestRevision === revision) {
-          setQueue(items);
-          setLoadError(false);
+          setSnapshot({ date: selectedDate, rows: items });
+          setFailedDate(null);
         }
       } catch {
-        if (!signal.aborted && requestRevision === revision) setLoadError(true);
+        if (!signal.aborted && requestRevision === revision) setFailedDate(selectedDate);
       } finally {
         inFlight = false;
         if (refreshPending) {
@@ -74,15 +85,28 @@ export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) 
       void loadQueue(true);
     };
     void loadQueue();
-    const interval = window.setInterval(() => void loadQueue(), 10_000);
-    document.addEventListener("visibilitychange", refreshWhenVisible);
+    const interval = historyDate === null ? window.setInterval(() => void loadQueue(), 10_000) : undefined;
+    if (historyDate === null) document.addEventListener("visibilitychange", refreshWhenVisible);
     return () => {
       controller.abort();
       window.clearInterval(interval);
       document.removeEventListener("visibilitychange", refreshWhenVisible);
       refreshAfterAction.current = null;
+      abortQueue.current = null;
     };
-  }, [apiUrl, user]);
+  }, [apiUrl, user, historyDate, selectedDate]);
+
+  const actionPending = calling || completing !== null;
+
+  function selectDate(date: string) {
+    const nextDate = date === today ? null : date;
+    if (!date || date > today || nextDate === historyDate) return;
+    abortQueue.current?.abort();
+    setHistoryDate(nextDate);
+    setSnapshot(null);
+    setFailedDate(null);
+    setMessage("");
+  }
 
   async function callNext() {
     setCalling(true);
@@ -130,6 +154,8 @@ export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) 
     }
   }
 
+  const loadedQueue = snapshot?.date === selectedDate ? snapshot.rows : null;
+  const loadError = failedDate === selectedDate;
   const queue = loadedQueue ?? [];
   const loading = loadedQueue === null && !loadError;
   // Completed tokens still count toward the call history.
@@ -145,16 +171,23 @@ export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) 
 
   return (
     <section aria-labelledby="staff-queue">
-      <h2 id="staff-queue">Today’s OPD queue</h2>
-      <button type="button" disabled={calling || loading || completing !== null} onClick={callNext}>Call next</button>
+      <h2 id="staff-queue">{viewingToday ? "Today’s OPD queue" : `OPD queue for ${historyDate}`}</h2>
+      <label>
+        Queue date{" "}
+        <input type="date" value={historyDate ?? today} max={today} disabled={actionPending}
+          onChange={(event) => selectDate(event.target.value)} />
+      </label>{" "}
+      <button type="button" disabled={actionPending || viewingToday} onClick={() => selectDate(today)}>Today</button>
+      {viewingToday && <button type="button" disabled={actionPending || loading} onClick={callNext}>Call next</button>}
       {message && <p role="status">{message}</p>}
       {loading && <p role="status">Loading queue…</p>}
       {loadError && <p role="status">{loadedQueue === null
-        ? "Could not load the queue. The page will retry automatically."
+        ? viewingToday ? "Could not load the queue. The page will retry automatically."
+          : "Could not load the queue for this date. Refresh the page or select another date."
         : "Could not refresh the queue. Showing the last update."}</p>}
       {loadedQueue !== null && (
         <>
-          <p>{lastCalled ? `Last called token: ${lastCalled.tokenNumber}` : "No tokens called today."}</p>
+          <p>{lastCalled ? `Last called token: ${lastCalled.tokenNumber}` : "No tokens called for this date."}</p>
           <dl aria-label="Queue status counts">
             {Object.entries(counts).map(([status, count]) => (
               <div key={status}>
@@ -176,24 +209,24 @@ export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) 
               onChange={(event) => setTokenSearch(event.target.value)} />
           </label>
           {visibleRows.length === 0 ? (
-            <p>{searchedToken === "" && statusFilter === "All"
-              ? "No tokens booked today."
+            <p>{queue.length === 0
+              ? "No tokens booked for this date."
               : "No tokens match the current search and status filter."}</p>
           ) : (
             <table>
-              <thead><tr><th scope="col">Token</th><th scope="col">Status</th><th scope="col">Called time</th><th scope="col">Action</th></tr></thead>
+              <thead><tr><th scope="col">Token</th><th scope="col">Status</th><th scope="col">Called time</th>{viewingToday && <th scope="col">Action</th>}</tr></thead>
               <tbody>
                 {visibleRows.map((item) => (
                   <tr key={item.id}>
                     <td>{item.tokenNumber}</td>
                     <td>{item.status}</td>
                     <td>{item.calledAt && <time dateTime={item.calledAt}>{calledTime.format(new Date(item.calledAt))}</time>}</td>
-                    <td>{item.status === "Called" && (
+                    {viewingToday && <td>{item.status === "Called" && (
                       <button type="button" disabled={calling || completing !== null}
                         aria-label={`Complete token ${item.tokenNumber}`} onClick={() => void complete(item)}>
                         {completing === item.id ? "Completing…" : "Complete"}
                       </button>
-                    )}</td>
+                    )}</td>}
                   </tr>
                 ))}
               </tbody>

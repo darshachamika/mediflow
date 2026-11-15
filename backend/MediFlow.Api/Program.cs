@@ -5,6 +5,7 @@ using MediFlow.Api.Data;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.EntityFrameworkCore;
 using System.Data;
+using System.Globalization;
 using System.Security.Claims;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -21,7 +22,8 @@ builder.Services.AddSingleton(_ => FirebaseApp.Create(new AppOptions
 builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
     policy.WithOrigins(builder.Configuration["Frontend:Origin"]!)
         .WithMethods("GET", "POST")
-        .WithHeaders("Authorization", "Idempotency-Key")));
+        .WithHeaders("Authorization", "Idempotency-Key")
+        .WithExposedHeaders("X-Opd-Date")));
 
 builder.Services.AddAuthentication(FirebaseBearerHandler.SchemeName)
     .AddScheme<AuthenticationSchemeOptions, FirebaseBearerHandler>(
@@ -116,14 +118,22 @@ bookings.MapPost("/{bookingId:long}/cancel", async (long bookingId, ClaimsPrinci
 });
 
 var queue = api.MapGroup("/opd/queue").RequireAuthorization("OpdStaff");
-queue.MapGet("", async (HttpResponse response, MediFlowDbContext db, CancellationToken cancellationToken) =>
+queue.MapGet("", async (HttpRequest request, HttpResponse response, MediFlowDbContext db, CancellationToken cancellationToken) =>
 {
     response.Headers.CacheControl = "no-store";
     var today = OpdBooking.Today();
-    return await db.OpdBookings.AsNoTracking().Where(booking => booking.OpdDate == today)
+    var date = today;
+    if (request.Query.TryGetValue("date", out var dates)
+        && (dates.Count != 1 || !DateOnly.TryParseExact(dates[0], "yyyy-MM-dd",
+            CultureInfo.InvariantCulture, DateTimeStyles.None, out date) || date > today))
+        return Results.BadRequest(new { error = "Use an OPD date in YYYY-MM-DD format on or before today." });
+
+    var items = await db.OpdBookings.AsNoTracking().Where(booking => booking.OpdDate == date)
         .OrderBy(booking => booking.TokenNumber)
         .Select(booking => new { booking.Id, booking.TokenNumber, booking.Status, booking.CalledAt, booking.CompletedAt })
         .ToListAsync(cancellationToken);
+    response.Headers["X-Opd-Date"] = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+    return Results.Ok(items);
 });
 
 queue.MapPost("/call-next", async (HttpRequest request, ClaimsPrincipal user,
