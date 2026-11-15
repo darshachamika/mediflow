@@ -82,6 +82,9 @@ try {
   await task.getByLabel("Lab result").fill(result);
   await task.getByRole("button", { name: "Save lab result", exact: true }).click();
   await task.getByText(result, { exact: true }).waitFor();
+  const enteredOnly = await refreshPatient(patient);
+  assert(!enteredOnly.records[1].some((item) => item.test === testName), "An entered, unverified result must stay private.");
+  assert.equal(await enteredOnly.view.getByText(result, { exact: true }).count(), 0);
   await task.getByRole("button", { name: "Verify lab result", exact: true }).click();
   await lab.getByText(`Result verified for ${testName}. The treating doctor can now publish it.`, { exact: true }).waitFor();
   await task.waitFor({ state: "hidden" });
@@ -92,6 +95,10 @@ try {
   assert.equal(await verifiedOnly.view.getByText(result, { exact: true }).count(), 0);
 
   await doctor.getByRole("button", { name: "Complete consultation", exact: true }).click();
+  await doctor.getByText(`Completed consultation for token ${booked.tokenNumber}.`, { exact: true }).waitFor();
+  const completedDraft = await refreshPatient(patient);
+  assert(!completedDraft.records[0].some((item) => item.visitId === booked.id), "Completing a visit must not publish its draft.");
+  assert.equal(await completedDraft.view.getByText(summary, { exact: true }).count(), 0);
   await chart.getByRole("button", { name: "Publish visit summary", exact: true }).click();
   await chart.getByText("Visit summary published.", { exact: true }).waitFor();
   await chart.getByRole("button", { name: "Refresh visit", exact: true }).click();
@@ -125,12 +132,33 @@ try {
   assert.equal(await isolated.view.getByText(summary, { exact: true }).count(), 0);
   assert.equal(await isolated.view.getByText(result, { exact: true }).count(), 0);
   const authorization = await observeAuthorization(secondPatient, `${clinical}/me/visits`, "Refresh My Visits");
+  const ownerAuthorization = await observeAuthorization(patient, `${clinical}/me/visits`, "Refresh My Visits");
+  const ownerProfile = await patient.request.get(`${apiUrl}/api/me`, { headers: { Authorization: ownerAuthorization } });
+  assert.equal(ownerProfile.status(), 200);
+  const { id: ownerId } = await ownerProfile.json();
+  const labResult = published.records[1].find((item) => item.test === testName && item.result === result);
+  const appointment = published.records[2].find((item) => Date.parse(item.startsAt) === startsAt.getTime());
+  assert(labResult && appointment, "The newly published result and appointment must have API identifiers.");
+  for (const [resource, idField, id] of [
+    ["visits", "visitId", booked.id],
+    ["lab", "id", labResult.id],
+    ["appointments", "id", appointment.id],
+  ]) {
+    const response = await secondPatient.request.get(`${clinical}/me/${resource}`, {
+      headers: { Authorization: authorization },
+      params: { patientId: ownerId, [idField]: id },
+    });
+    assert.equal(response.status(), 200);
+    const records = await response.json();
+    assert(Array.isArray(records) && !records.some((item) => item[idField] === id),
+      `Patient B's direct ${resource} request must ignore another patient's identifiers.`);
+  }
   assert.equal((await secondPatient.request.get(`${clinical}/visits/${booked.id}`, { headers: { Authorization: authorization } })).status(), 403);
   const otherDoctor = await signIn("doctor-b@example.test");
   const otherDoctorAuth = await observeAuthorization(otherDoctor, `${clinical}/visits`, "Refresh visits");
   assert.equal((await otherDoctor.request.get(`${clinical}/visits/${booked.id}`, { headers: { Authorization: otherDoctorAuth } })).status(), 404);
   assert.equal(await otherDoctor.getByLabel("Visit", { exact: true }).locator(`option[value="${booked.id}"]`).count(), 0);
-  console.log("PASS clinical browser: second patient cannot read the summary, lab result or follow-up; other doctor cannot open the visit");
+  console.log("PASS clinical browser and direct API: second patient cannot read the summary, lab result or follow-up; other doctor cannot open the visit");
 } finally {
   await browser.close();
 }
