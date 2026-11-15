@@ -41,8 +41,8 @@ public sealed class OpdBooking
         db.OpdBookings.Where(item => item.OpdDate == date && item.Status == Waiting)
             .OrderBy(item => item.QueueEnteredAt).ThenBy(item => item.TokenNumber);
 
-    public static async Task<OpdBooking> CreateOrReplayAsync(
-        MediFlowDbContext db, int? patientId, string key, CancellationToken cancellationToken, int? issuedById = null)
+    internal static async Task<OpdBooking> CreateOrReplayAsync(
+        MediFlowDbContext db, int? patientId, string key, CancellationToken cancellationToken, int? issuedById = null, OpdEta? eta = null)
     {
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         await LockQueueAsync(db, cancellationToken);
@@ -66,7 +66,10 @@ public sealed class OpdBooking
             };
             db.OpdBookings.Add(booking);
             if (issuedById is int receptionist)
+            {
                 db.Add(new OpdCheckIn { Booking = booking, StaffId = receptionist, Method = "WalkIn", JoinedAt = booking.QueueEnteredAt!.Value });
+                db.Add(await eta!.Observe(db, booking, cancellationToken));
+            }
             await db.SaveChangesAsync(cancellationToken);
         }
 

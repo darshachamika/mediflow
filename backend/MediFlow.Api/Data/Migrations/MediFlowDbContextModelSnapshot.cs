@@ -330,6 +330,34 @@ namespace MediFlow.Api.Data.Migrations
                     b.ToTable("opd_departments", (string)null);
                 });
 
+            modelBuilder.Entity("MediFlow.Api.Data.OpdEstimateSample", b =>
+                {
+                    b.Property<long>("BookingId")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("BusyRooms")
+                        .HasColumnType("integer");
+
+                    b.Property<double>("ConsultationMinutes")
+                        .HasColumnType("double precision");
+
+                    b.Property<DateTimeOffset>("ObservedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("ServingRooms")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("UsesFallback")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("WaitingAhead")
+                        .HasColumnType("integer");
+
+                    b.HasKey("BookingId");
+
+                    b.ToTable("opd_estimate_samples", (string)null);
+                });
+
             modelBuilder.Entity("MediFlow.Api.Data.OpdLabRequest", b =>
                 {
                     b.Property<long>("Id")
@@ -642,6 +670,17 @@ namespace MediFlow.Api.Data.Migrations
                     b.HasOne("MediFlow.Api.Data.AppUser", null)
                         .WithMany()
                         .HasForeignKey("StaffId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Booking");
+                });
+
+            modelBuilder.Entity("MediFlow.Api.Data.OpdEstimateSample", b =>
+                {
+                    b.HasOne("MediFlow.Api.Data.OpdBooking", "Booking")
+                        .WithOne()
+                        .HasForeignKey("MediFlow.Api.Data.OpdEstimateSample", "BookingId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 

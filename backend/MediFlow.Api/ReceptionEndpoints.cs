@@ -39,7 +39,7 @@ internal static class ReceptionEndpoints
             var booking = await db.OpdBookings.AsNoTracking().SingleOrDefaultAsync(b => b.OpdDate == today && b.TokenNumber == number, ct);
             return booking is null ? Results.NotFound() : Results.Ok(Token(booking));
         });
-        reception.MapPost("/check-in", async (CheckInRequest request, ClaimsPrincipal user, MediFlowDbContext db, CancellationToken ct) =>
+        reception.MapPost("/check-in", async (CheckInRequest request, ClaimsPrincipal user, MediFlowDbContext db, OpdEta eta, CancellationToken ct) =>
         {
             if ((request.Code is null) == (request.TokenNumber is null) || request.TokenNumber is <= 0
                 || (request.Code is not null && (request.Code.Length != 64 || !request.Code.All(Uri.IsHexDigit))))
@@ -63,15 +63,16 @@ internal static class ReceptionEndpoints
             booking.Status = OpdBooking.Waiting;
             booking.QueueEnteredAt = joinedAt;
             db.Add(new OpdCheckIn { Booking = booking, StaffId = UserId(user), Method = hash is null ? "Manual" : "QR", JoinedAt = joinedAt });
+            db.Add(await eta.Observe(db, booking, ct));
             await db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
             return Results.Ok(new { booking.Id, booking.TokenNumber, booking.OpdDate, booking.Status, JoinedAt = joinedAt });
         });
-        reception.MapPost("/walk-ins", async (HttpRequest request, ClaimsPrincipal user, MediFlowDbContext db, CancellationToken ct) =>
+        reception.MapPost("/walk-ins", async (HttpRequest request, ClaimsPrincipal user, MediFlowDbContext db, OpdEta eta, CancellationToken ct) =>
         {
             var key = readKey(request);
             if (key is null) return Results.BadRequest(new { error = "Supply a valid Idempotency-Key." });
-            var booking = await OpdBooking.CreateOrReplayAsync(db, null, key, ct, UserId(user));
+            var booking = await OpdBooking.CreateOrReplayAsync(db, null, key, ct, UserId(user), eta);
             return Results.Ok(new { booking.Id, booking.TokenNumber, booking.OpdDate });
         });
     }

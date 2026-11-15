@@ -130,6 +130,10 @@ Provision an `OpdAdmin` profile to list or create departments, rooms, and daily 
 
 Patient calls and follow-up bookings write an outbox entry in the same database transaction. The worker makes delivered entries available at `GET /api/opd/notifications` for the owning patient. Appointment reminders become due 24 hours before the slot, or immediately for a closer slot. Every SMS in this implementation is simulated and recorded without a phone number or a provider call.
 
+### Approximate wait estimate
+
+`GET /api/opd/bookings/{id}/eta` estimates the wait for the owning patient's current Waiting token. It uses the check-in order, active assigned rooms, occupied rooms, and recent completed consultation durations. Configure the fallback with `OpdEta__FallbackMinutes` (default 12). With no serving rooms the estimate is unavailable. Check-in and walk-in issuance record feature snapshots for later evaluation. Consultation start time provides the eventual outcome.
+
 ## Build checks
 
 ```powershell

@@ -44,6 +44,10 @@ builder.Services.AddAuthorizationBuilder()
     .AddPolicy("OpdAdmin", policy => policy.RequireRole("OpdAdmin"));
 builder.Services.AddSignalR();
 builder.Services.AddHostedService<OpdNotificationWorker>();
+var fallbackMinutes = builder.Configuration.GetValue("OpdEta:FallbackMinutes", 12d);
+if (!double.IsFinite(fallbackMinutes) || fallbackMinutes is < 1 or > 180)
+    throw new InvalidOperationException("OpdEta:FallbackMinutes must be between 1 and 180.");
+builder.Services.AddSingleton(new OpdEta(fallbackMinutes));
 
 var app = builder.Build();
 
@@ -69,6 +73,7 @@ api.MapGet("/me", (ClaimsPrincipal user) => Results.Ok(new
 
 var bookings = api.MapGroup("/opd/bookings").RequireAuthorization("Patient");
 api.MapReception(bookings, ReadIdempotencyKey);
+bookings.MapEta();
 
 bookings.MapGet("", async (
     HttpRequest request, HttpResponse response, ClaimsPrincipal user,

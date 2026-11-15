@@ -85,6 +85,11 @@ public sealed class MediFlowDbContext(DbContextOptions<MediFlowDbContext> option
         notification.HasIndex(item => new { item.DueAt, item.Id }).HasFilter("\"DeliveredAt\" IS NULL AND \"FailedAt\" IS NULL");
         notification.HasOne<AppUser>().WithMany().HasForeignKey(item => item.PatientId).OnDelete(DeleteBehavior.Restrict);
 
+        var estimate = modelBuilder.Entity<OpdEstimateSample>();
+        estimate.ToTable("opd_estimate_samples");
+        estimate.HasKey(item => item.BookingId);
+        estimate.HasOne(item => item.Booking).WithOne().HasForeignKey<OpdEstimateSample>(item => item.BookingId).OnDelete(DeleteBehavior.Restrict);
+
         var assignment = modelBuilder.Entity<OpdAssignment>();
         assignment.ToTable("opd_assignments");
         assignment.HasKey(item => new { item.OpdDate, item.RoomId });

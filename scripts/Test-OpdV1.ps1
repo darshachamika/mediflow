@@ -200,6 +200,18 @@ VALUES ((SELECT id FROM app_users WHERE firebase_uid='$($accounts[0].localId)'),
     $waiting = (Read-Response (Send GET $bookings $patientB)).Body
     Assert ($waiting.items.Count -eq 1 -and $waiting.items[0].id -eq $secondB.id -and
         $waiting.items[0].waitingAhead -eq ($secondB.tokenNumber - 2)) 'Ownership or waiting-ahead count mismatch.'
+    $etaUrl = "$bookings/$($secondB.id)/eta"
+    Read-Response (Send GET $etaUrl $patientA) 404
+    Read-Response (Send GET $etaUrl) 401
+    $estimate = (Read-Response (Send GET $etaUrl $patientB)).Body
+    Assert ($estimate.available -and $estimate.approximate -and $estimate.waitingAhead -eq $waiting.items[0].waitingAhead -and $estimate.minutes -eq 0) 'ETA disagrees with queue position or two available rooms.'
+    'UPDATE opd_rooms SET "Active"=false;' | docker exec -i $container psql -U postgres -v ON_ERROR_STOP=1
+    $estimate = (Read-Response (Send GET $etaUrl $patientB)).Body
+    Assert (!$estimate.available -and $null -eq $estimate.minutes -and $estimate.reason -eq 'NoServingRooms') 'ETA should be unavailable without rooms.'
+    'UPDATE opd_rooms SET "Active"=true;' | docker exec -i $container psql -U postgres -v ON_ERROR_STOP=1
+    $samples = docker exec $container psql -U postgres -tAc 'SELECT count(*) FROM opd_estimate_samples'
+    Assert ($samples.Trim() -eq '3') 'Expected one context sample per check-in.'
+    'PASS ETA availability, FIFO count, authorization, and atomic check-in samples'
 
     $call = Send POST $callNext $staff 'same-call'
     $callRetry = Send POST $callNext $staff 'same-call'
