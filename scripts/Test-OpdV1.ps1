@@ -1,5 +1,9 @@
-param([switch]$Browser, [switch]$Upgrade, [switch]$Vector)
+param([switch]$Browser, [switch]$Upgrade, [switch]$Vector, [string]$VectorPackage)
 $ErrorActionPreference = 'Stop'
+if ($VectorPackage) {
+    if (!$Vector) { throw '-VectorPackage requires -Vector.' }
+    $VectorPackage = (Resolve-Path -LiteralPath $VectorPackage).Path
+}
 
 $root = (Resolve-Path "$PSScriptRoot/..").Path
 $runId = [guid]::NewGuid().ToString('N').Substring(0, 8)
@@ -79,7 +83,7 @@ try {
     $emulator = Start-Process node -ArgumentList ('"' + $firebaseJs + '" emulators:start --only auth --project ' + $emulatorProject + ' --config firebase.json') `
         -WorkingDirectory $scratch -WindowStyle Hidden -PassThru -RedirectStandardOutput "$scratch/firebase.out" -RedirectStandardError "$scratch/firebase.err"
 
-    $image = if ($Vector) { 'pgvector/pgvector:pg17' } else { 'postgres:17' }
+    $image = if ($Vector -and !$VectorPackage) { 'pgvector/pgvector:pg17' } else { 'postgres:17' }
     docker run -d --rm --name $container -e POSTGRES_PASSWORD=disposable -p 127.0.0.1::5432 $image | Out-Null
     Assert ($LASTEXITCODE -eq 0) 'Could not start disposable PostgreSQL.'
     $databaseStarted = $true
@@ -89,6 +93,12 @@ try {
         Start-Sleep -Seconds 1
     }
     Assert ($LASTEXITCODE -eq 0) 'Disposable PostgreSQL did not become ready.'
+    if ($VectorPackage) {
+        docker cp $VectorPackage "${container}:/tmp/pgvector.deb"
+        Assert ($LASTEXITCODE -eq 0) 'Could not copy pgvector package into the disposable container.'
+        docker exec -u root $container dpkg -i /tmp/pgvector.deb
+        Assert ($LASTEXITCODE -eq 0) 'Could not install pgvector in the disposable container.'
+    }
     $port = ((docker port $container 5432/tcp) -split ':')[-1]
     $env:ConnectionStrings__MediFlow = "Host=127.0.0.1;Port=$port;Database=postgres;Username=postgres;Password=disposable"
     $env:ASPNETCORE_ENVIRONMENT = 'Development'
@@ -284,17 +294,35 @@ VALUES ((SELECT id FROM app_users WHERE firebase_uid='$($accounts[0].localId)'),
     $roomB = '/api/opd/rooms/2'
     Read-Response (Send POST "$roomA/call-next" $doctorB 'wrong-assignment') 403
     Read-Response (Send POST "$roomA/call-next" $patientA 'wrong-role') 403
+    Read-Response (Send GET $roomA $doctorB) 403
+    Read-Response (Send GET $roomA) 401
+    Assert ($null -eq (Read-Response (Send GET $roomA $doctorA)).Body.activeToken) 'An empty room unexpectedly has an active token.'
     $socket = [Net.WebSockets.ClientWebSocket]::new()
     $socketTimeout = [Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(15))
-    $socket.ConnectAsync([uri]($apiUrl.Replace('http:', 'ws:') + '/hubs/opd'), $socketTimeout.Token).GetAwaiter().GetResult()
+    $socketUrl = [uri]($apiUrl.Replace('http:', 'ws:') + '/hubs/opd')
+    $null = $socket.ConnectAsync($socketUrl, $socketTimeout.Token).GetAwaiter().GetResult()
     $handshake = [Text.Encoding]::UTF8.GetBytes('{"protocol":"json","version":1}' + [char]30)
-    $socket.SendAsync([ArraySegment[byte]]::new($handshake), [Net.WebSockets.WebSocketMessageType]::Text, $true, $socketTimeout.Token).GetAwaiter().GetResult()
+    function Send-Socket($connection, [byte[]]$bytes) {
+        $null = $connection.SendAsync([ArraySegment[byte]]::new($bytes), [Net.WebSockets.WebSocketMessageType]::Text, $true, $socketTimeout.Token).GetAwaiter().GetResult()
+    }
+    Send-Socket $socket $handshake
     $buffer = [byte[]]::new(8192)
-    function Read-Socket {
-        $packet = $socket.ReceiveAsync([ArraySegment[byte]]::new($buffer), $socketTimeout.Token).GetAwaiter().GetResult()
+    function Read-Socket($connection) {
+        $packet = $connection.ReceiveAsync([ArraySegment[byte]]::new($buffer), $socketTimeout.Token).GetAwaiter().GetResult()
         [Text.Encoding]::UTF8.GetString($buffer, 0, $packet.Count)
     }
-    Assert ((Read-Socket) -match '\{\}') 'SignalR handshake failed.'
+    Assert ((Read-Socket $socket) -match '\{\}') 'SignalR handshake failed.'
+    $subscribe = [Text.Encoding]::UTF8.GetBytes('{"type":1,"invocationId":"subscribe","target":"Subscribe","arguments":[]}' + [char]30)
+    Send-Socket $socket $subscribe
+    Assert ((Read-Socket $socket) -match '"error"') 'Anonymous client joined a private SignalR group.'
+    $patientSocket = [Net.WebSockets.ClientWebSocket]::new()
+    $patientSocket.Options.SetRequestHeader('Authorization', "Bearer $patientA")
+    $null = $patientSocket.ConnectAsync($socketUrl, $socketTimeout.Token).GetAwaiter().GetResult()
+    Send-Socket $patientSocket $handshake
+    Assert ((Read-Socket $patientSocket) -match '\{\}') 'Patient SignalR handshake failed.'
+    Send-Socket $patientSocket $subscribe
+    $subscribed = Read-Socket $patientSocket
+    Assert ($subscribed -match '"invocationId":"subscribe"' -and $subscribed -notmatch '"error"') 'Patient SignalR subscription failed.'
     $claimA = Send POST "$roomA/call-next" $doctorA 'room-call-a'
     $claimB = Send POST "$roomB/call-next" $doctorB 'room-call-b'
     $claimRetry = Send POST "$roomA/call-next" $doctorA 'room-call-a'
@@ -305,11 +333,21 @@ VALUES ((SELECT id FROM app_users WHERE firebase_uid='$($accounts[0].localId)'),
     Read-Response (Send POST "$roomA/call-next" $doctorA 'room-busy') 409
     $snapshot = (Read-Response (Send GET '/api/opd/display')).Body
     Assert ($snapshot.Count -eq 2 -and ($snapshot[0].PSObject.Properties.Name -join ',') -eq 'tokenNumber,room') 'Public snapshot leaked private fields.'
-    $event = Read-Socket
+    $event = Read-Socket $socket
     Assert ($event -match 'DisplayUpdated' -and $event -match 'tokenNumber' -and $event -notmatch 'patientId|bookingId|doctorId') 'Public SignalR event mismatch.'
+    $personalEvent = ''
+    for ($i = 0; $i -lt 4 -and $personalEvent -notmatch 'TokenUpdated'; $i++) {
+        $personalEvent = Read-Socket $patientSocket
+    }
+    Assert ($personalEvent -match 'TokenUpdated' -and $personalEvent -match ('"id":' + $visit.id + '[,}]')) 'Patient SignalR update did not match their own booking.'
     $socket.Dispose()
+    $patientSocket.Dispose()
     $roomTokenA = $roomCallA.Body.token.id
     $roomTokenB = $roomCallB.Body.token.id
+    Assert ((Read-Response (Send GET $roomA $doctorA)).Body.activeToken.id -eq $roomTokenA) 'Doctor reconnect snapshot did not restore their active token.'
+    $constraintError = 'INSERT INTO opd_bookings(idempotency_key,opd_date,token_number,status,room_id) VALUES (''occupancy-probe'',(now() AT TIME ZONE ''Asia/Colombo'')::date,800,''InConsultation'',1);' |
+        docker exec -i $container psql -U postgres -v ON_ERROR_STOP=1 2>&1
+    Assert ($LASTEXITCODE -ne 0 -and ($constraintError -join ' ') -match 'IX_opd_bookings_opd_date_room_id') 'Database did not reject duplicate active room occupancy.'
     Read-Response (Send POST "$roomA/tokens/$roomTokenA/complete" $doctorA) 409
     Read-Response (Send POST "$queue/$roomTokenA/complete" $staff) 409
     Read-Response (Send POST "$roomB/tokens/$roomTokenA/start" $doctorB) 404
@@ -441,11 +479,15 @@ VALUES ((SELECT id FROM app_users WHERE firebase_uid='$($accounts[0].localId)'),
         $frontend = Start-Process node -ArgumentList 'node_modules/next/dist/bin/next','start','--port','3097' `
             -WorkingDirectory $frontendDir -WindowStyle Hidden -PassThru -RedirectStandardOutput "$scratch/frontend.out" -RedirectStandardError "$scratch/frontend.err"
         Wait-Http $frontendOrigin $frontend
-        "Browser fixture ready at $frontendOrigin. Use patient-a@example.test, patient-b@example.test or staff@example.test with password $password."
+        "Browser fixture ready at $frontendOrigin. Use patient-a@example.test, patient-b@example.test, staff@example.test or reception@example.test with password $password."
+        "API: $apiUrl. Auth Emulator: $authUrl."
         "Populated date $past. Empty date $empty. Press Enter to clean up."
         $null = Read-Host
     }
 } finally {
+    if ($patientSocket) { $patientSocket.Dispose() }
+    if ($socket) { $socket.Dispose() }
+    if ($socketTimeout) { $socketTimeout.Dispose() }
     if ($client) { $client.Dispose() }
     foreach ($process in @($frontend, $api, $emulator)) {
         if ($process -and !$process.HasExited) { Stop-Process -InputObject $process }

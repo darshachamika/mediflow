@@ -34,6 +34,8 @@ dotnet ef database update --project $apiProject -- --environment Development
 
 Install `dotnet-ef` once. After future model changes, generate a migration with `dotnet ef migrations add YourMigrationName --project $apiProject --output-dir Data/Migrations -- --environment Development`, review it, and run the update command again. The Compose password is a local development placeholder. Run `docker compose down` to stop PostgreSQL and retain its volume.
 
+For a pgAdmin-managed instance, use the server's actual host, port, database and role in the same User Secrets command. Apply migrations with the same EF command. In pgAdmin's Query Tool, check the migration history with `SELECT "MigrationId" FROM "__EFMigrationsHistory" ORDER BY "MigrationId";`.
+
 ## Start and verify sign-in
 
 Start the API in the terminal where you set its environment variables.
@@ -102,7 +104,7 @@ VALUES ('your-staff-firebase-uid', 'OpdStaff');
 
 1. Sign in as a Patient and book two tokens. Check that both appear in the Patient view.
 2. Check in both tokens through the Reception API. Sign in as OPD staff and confirm the tokens appear as **Waiting**.
-3. Select **Call next**. Check that the lowest waiting token becomes **Called**, shows a Colombo call time, and appears as the last called token.
+3. Select **Call next**. Check that the first token in check-in order becomes **Called**, shows a Colombo call time, and appears as the last called token.
 4. Continue until every token is called, then select **Call next** again. The page should report that no tokens are waiting.
 5. In the browser Network tab, replay a successful call with the same Bearer token and `Idempotency-Key`. The response should match the original and the queue should stay unchanged.
 
@@ -114,7 +116,7 @@ Assign a `Doctor` profile to an active room for the Colombo service date. One ro
 
 Use `POST /api/opd/rooms/{roomId}/tokens/{bookingId}/{action}` with `start`, `complete`, `no-show`, or `requeue`. A requeue places the token at the back using its new queue entry time. Existing OpdStaff actions remain available for unassigned calls. Only the assigned doctor can change a room consultation.
 
-`GET /api/opd/display` is the public reconnect snapshot. It exposes active token numbers and room names. The SignalR hub at `/hubs/opd` broadcasts the same shape as `DisplayUpdated`. Authenticated clients can invoke `Subscribe` for their authorized `TokenUpdated` or `QueueUpdated` events.
+`GET /api/opd/display` is the public reconnect snapshot. It exposes active token numbers and room names. Doctors can recover their active token with `GET /api/opd/rooms/{roomId}`. The SignalR hub at `/hubs/opd` broadcasts the public snapshot as `DisplayUpdated`. Authenticated clients can invoke `Subscribe` for their authorized `TokenUpdated` or `QueueUpdated` events.
 
 ### Clinical records and follow-ups
 
@@ -191,9 +193,20 @@ pwsh -NoProfile -File scripts/Test-OpdV1.ps1
 pwsh -NoProfile -File scripts/Test-OpdV1.ps1 -Upgrade
 ```
 
-The suite checks server-side roles and ownership, booking replay and concurrent allocation, queue position, Call next replay and ordering, completion replay and timestamps, cancellation racing Call next, and both history response contracts. Patient history returns `{ opdDate, items }`. Staff history returns an array with `X-Opd-Date`. Dates use Asia/Colombo.
+The server suite checks roles, ownership, booking and reception, queue position and ETA, concurrent room claims, SignalR permissions and public payloads, consultation and lab publication, appointment capacity, outbox delivery, admin conflicts and both history formats. Patient history returns `{ opdDate, items }`. Staff history returns an array with `X-Opd-Date`. Dates use Asia/Colombo. The upgrade run seeds a legacy Waiting booking before applying the new migrations and checks that it survives.
 
-For browser verification, use the same fixture in a PowerShell terminal. Port 3097 must be available. The script prints the test dates and the credentials for its disposable emulator accounts.
+The optional vector run uses `pgvector/pgvector:pg17` with the local test provider. If you have a trusted PostgreSQL 17 pgvector Debian package matching the architecture and Debian release of your `postgres:17` image, pass its local path with `-Vector -VectorPackage 'C:\path\to\postgresql-17-pgvector.deb'`. The script installs it only in the disposable test container.
+
+For the PostgreSQL 17.11 Debian 13 amd64 image, the PGDG 0.8.6 package is an alternative to pulling the vector image.
+
+```powershell
+$package = Join-Path $env:TEMP 'mediflow-pgvector-pg17.deb'
+curl.exe --fail --location 'https://apt.postgresql.org/pub/repos/apt/pool/main/p/pgvector/postgresql-17-pgvector_0.8.6-1.pgdg13%2B2_amd64.deb' --output $package
+if ($LASTEXITCODE -ne 0) { throw 'pgvector download failed' }
+pwsh -NoProfile -File scripts/Test-OpdV1.ps1 -Upgrade -Vector -VectorPackage $package
+```
+
+For manual browser verification, use the same fixture in a PowerShell terminal. Port 3097 must be available. Browser mode runs the server assertions and serves the frontend. You perform the browser checks. The script prints the test dates and the credentials for its disposable emulator accounts.
 
 ```powershell
 npm.cmd --prefix frontend ci
@@ -201,6 +214,20 @@ pwsh -NoProfile -File scripts/Test-OpdV1.ps1 -Browser
 ```
 
 1. Open `http://localhost:3097` as `patient-a@example.test`. Select the populated history date and confirm only token 1 appears. Select the empty date and confirm the empty message. Select **Today** and confirm token rows return and requests resume every 10 seconds while visible.
-2. Book two tokens, note the token numbers, and cancel the higher Waiting token. Open a separate browser session as `staff@example.test`. Select **Call next** until staff calls the lower token, then select **Complete** for that token. Confirm the Patient view shows both changes after polling.
+2. Book two tokens and note their numbers. In a second PowerShell terminal, sign in to the fixture's Auth Emulator as reception and check in both tokens. Use the emulator URL, API URL, and password printed by the fixture.
+
+```powershell
+$auth = Read-Host 'Fixture Auth Emulator URL'
+$api = Read-Host 'Fixture API URL'
+$password = Read-Host 'Fixture password'
+$signIn = @{ email = 'reception@example.test'; password = $password; returnSecureToken = $true } | ConvertTo-Json
+$session = Invoke-RestMethod "$auth/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=demo" -Method Post -ContentType 'application/json' -Body $signIn
+$headers = @{ Authorization = "Bearer $($session.idToken)" }
+foreach ($number in @([int](Read-Host 'Lower token number'), [int](Read-Host 'Higher token number'))) {
+    Invoke-RestMethod "$api/api/opd/reception/check-in" -Method Post -Headers $headers -ContentType 'application/json' -Body (@{ tokenNumber = $number } | ConvertTo-Json)
+}
+```
+
+Cancel the higher Waiting token in the Patient view. Open a separate browser session as `staff@example.test`. Select **Call next**, then **Complete** for the lower token. Confirm the Patient view shows both changes after polling.
 3. In the staff view, select the populated date and verify token order, then select the empty date and verify four zero counts. Return to **Today** and verify the live queue. Sign in separately as `patient-b@example.test` and verify only that patient's history is visible.
 4. Press Enter in the fixture terminal to clean up. Rebuild the frontend with its normal Firebase configuration before starting a production build from the same directory.

@@ -12,6 +12,16 @@ internal static class DoctorEndpoints
     internal static void MapDoctor(this RouteGroupBuilder api, Func<HttpRequest, string?> readKey)
     {
         var doctor = api.MapGroup("/opd/rooms/{roomId:int}").RequireAuthorization("Doctor");
+        doctor.MapGet("", async (int roomId, ClaimsPrincipal user, MediFlowDbContext db, CancellationToken ct) =>
+        {
+            var actor = ReceptionEndpoints.UserId(user);
+            var day = OpdBooking.Today();
+            if (!await Assigned(db, roomId, actor, day, ct)) return Results.Forbid();
+            var booking = await db.OpdBookings.AsNoTracking().SingleOrDefaultAsync(b => b.OpdDate == day
+                && b.RoomId == roomId && b.DoctorId == actor
+                && (b.Status == OpdBooking.Called || b.Status == OpdBooking.InConsultation), ct);
+            return Results.Ok(new { roomId, opdDate = day, activeToken = booking is null ? null : PrivateToken(booking) });
+        });
         doctor.MapPost("/call-next", async (int roomId, HttpRequest request, ClaimsPrincipal user,
             MediFlowDbContext db, IHubContext<OpdDisplayHub> hub, CancellationToken ct) =>
         {

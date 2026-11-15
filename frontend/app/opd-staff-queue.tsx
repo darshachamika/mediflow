@@ -159,8 +159,9 @@ export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) 
   const loadError = failedDate === selectedDate;
   const queue = loadedQueue ?? [];
   const loading = loadedQueue === null && !loadError;
-  // Completed tokens still count toward the call history.
-  const lastCalled = queue.findLast((item) => item.calledAt !== null);
+  const lastCalled = queue.reduce<QueueToken | undefined>((latest, item) =>
+    item.calledAt && (!latest?.calledAt || Date.parse(item.calledAt) > Date.parse(latest.calledAt)) ? item : latest,
+    undefined);
   const counts = { Booked: 0, Waiting: 0, Called: 0, InConsultation: 0, Completed: 0, Cancelled: 0, NoShow: 0 };
   for (const item of queue) {
     counts[item.status]++;
