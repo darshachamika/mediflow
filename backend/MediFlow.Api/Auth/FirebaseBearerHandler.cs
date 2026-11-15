@@ -31,7 +31,12 @@ public sealed partial class FirebaseBearerHandler(
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
         if (!Request.Headers.TryGetValue("Authorization", out var header))
-            return AuthenticateResult.NoResult();
+        {
+            if (Request.Path != "/hubs/opd" || !Request.Query.TryGetValue("access_token", out var queryToken))
+                return AuthenticateResult.NoResult();
+            if (queryToken.Count != 1) return AuthenticateResult.Fail("Invalid hub token.");
+            header = $"Bearer {queryToken[0]}";
+        }
 
         if (header.Count != 1 || !AuthenticationHeaderValue.TryParse(header[0], out var authorization)
             || !SchemeName.Equals(authorization.Scheme, StringComparison.OrdinalIgnoreCase)

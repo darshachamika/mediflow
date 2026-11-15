@@ -34,6 +34,14 @@ public sealed class MediFlowDbContext(DbContextOptions<MediFlowDbContext> option
         booking.Property(item => item.Status).HasColumnName("status").HasMaxLength(16).HasDefaultValue(OpdBooking.Waiting);
         booking.Property(item => item.CalledAt).HasColumnName("called_at").HasPrecision(6);
         booking.Property(item => item.CompletedAt).HasColumnName("completed_at").HasPrecision(6);
+        booking.Property(item => item.StartedAt).HasColumnName("started_at").HasPrecision(6);
+        booking.Property(item => item.RoomId).HasColumnName("room_id");
+        booking.Property(item => item.DoctorId).HasColumnName("doctor_id");
+        booking.HasOne<OpdRoom>().WithMany().HasForeignKey(item => item.RoomId).OnDelete(DeleteBehavior.Restrict);
+        booking.HasOne<AppUser>().WithMany().HasForeignKey(item => item.DoctorId).OnDelete(DeleteBehavior.Restrict);
+        booking.HasIndex(item => new { item.OpdDate, item.RoomId }).IsUnique()
+            .HasFilter("room_id IS NOT NULL AND status IN ('Called', 'InConsultation')");
+        booking.HasIndex(item => new { item.OpdDate, item.Status, item.QueueEnteredAt, item.TokenNumber });
         booking.HasOne<AppUser>().WithMany().HasForeignKey(item => item.PatientId).OnDelete(DeleteBehavior.Restrict);
         booking.HasIndex(item => new { item.PatientId, item.IdempotencyKey }).IsUnique();
         booking.HasIndex(item => new { item.OpdDate, item.TokenNumber }).IsUnique();
@@ -53,5 +61,31 @@ public sealed class MediFlowDbContext(DbContextOptions<MediFlowDbContext> option
         call.HasOne<AppUser>().WithMany().HasForeignKey(action => action.StaffId).OnDelete(DeleteBehavior.Restrict);
         call.HasOne(action => action.Booking).WithMany().HasForeignKey(action => action.BookingId).OnDelete(DeleteBehavior.Restrict);
         call.HasIndex(action => action.BookingId).IsUnique();
+
+        var room = modelBuilder.Entity<OpdRoom>();
+        room.ToTable("opd_rooms");
+        room.Property(item => item.Name).HasMaxLength(80);
+        room.HasIndex(item => item.Name).IsUnique();
+
+        var assignment = modelBuilder.Entity<OpdAssignment>();
+        assignment.ToTable("opd_assignments");
+        assignment.HasKey(item => new { item.OpdDate, item.RoomId });
+        assignment.HasIndex(item => new { item.OpdDate, item.DoctorId }).IsUnique();
+        assignment.HasOne(item => item.Room).WithMany().HasForeignKey(item => item.RoomId).OnDelete(DeleteBehavior.Restrict);
+        assignment.HasOne<AppUser>().WithMany().HasForeignKey(item => item.DoctorId).OnDelete(DeleteBehavior.Restrict);
+
+        var roomCall = modelBuilder.Entity<OpdRoomCall>();
+        roomCall.ToTable("opd_room_calls");
+        roomCall.HasKey(item => new { item.DoctorId, item.Key });
+        roomCall.Property(item => item.Key).HasMaxLength(128);
+        roomCall.HasOne<OpdBooking>().WithMany().HasForeignKey(item => item.BookingId).OnDelete(DeleteBehavior.Restrict);
+        roomCall.HasOne<OpdRoom>().WithMany().HasForeignKey(item => item.RoomId).OnDelete(DeleteBehavior.Restrict);
+        roomCall.HasOne<AppUser>().WithMany().HasForeignKey(item => item.DoctorId).OnDelete(DeleteBehavior.Restrict);
+
+        var queueEvent = modelBuilder.Entity<OpdQueueEvent>();
+        queueEvent.ToTable("opd_queue_events");
+        queueEvent.Property(item => item.Action).HasMaxLength(32);
+        queueEvent.HasOne<OpdBooking>().WithMany().HasForeignKey(item => item.BookingId).OnDelete(DeleteBehavior.Restrict);
+        queueEvent.HasOne<AppUser>().WithMany().HasForeignKey(item => item.ActorId).OnDelete(DeleteBehavior.Restrict);
     }
 }

@@ -19,11 +19,16 @@ public sealed class OpdBooking
     public const string Waiting = "Waiting";
     public const string Booked = "Booked";
     public const string Called = "Called";
+    public const string InConsultation = "InConsultation";
+    public const string NoShow = "NoShow";
     public const string Completed = "Completed";
     public const string Cancelled = "Cancelled";
     public string Status { get; set; } = Waiting;
     public DateTimeOffset? CalledAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
+    public DateTimeOffset? StartedAt { get; set; }
+    public int? RoomId { get; set; }
+    public int? DoctorId { get; set; }
     public DateTimeOffset? QueueEnteredAt { get; set; }
     public string? CheckInHash { get; set; }
     public DateTimeOffset? CheckInExpiresAt { get; set; }
@@ -31,6 +36,10 @@ public sealed class OpdBooking
     // Booking, calling and cancellation share this lock so the head of the queue is stable.
     internal static Task LockQueueAsync(MediFlowDbContext db, CancellationToken cancellationToken) =>
         db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(1451986, 1)", cancellationToken);
+
+    internal static IQueryable<OpdBooking> WaitingQueue(MediFlowDbContext db, DateOnly date) =>
+        db.OpdBookings.Where(item => item.OpdDate == date && item.Status == Waiting)
+            .OrderBy(item => item.QueueEnteredAt).ThenBy(item => item.TokenNumber);
 
     public static async Task<OpdBooking> CreateOrReplayAsync(
         MediFlowDbContext db, int? patientId, string key, CancellationToken cancellationToken, int? issuedById = null)

@@ -22,8 +22,7 @@ public sealed class OpdCallAction
             return previous.Booking;
 
         var today = OpdBooking.Today();
-        var next = await db.OpdBookings.Where(booking => booking.OpdDate == today && booking.Status == OpdBooking.Waiting)
-            .OrderBy(booking => booking.TokenNumber)
+        var next = await OpdBooking.WaitingQueue(db, today)
             .FirstOrDefaultAsync(cancellationToken);
         if (next is not null)
         {

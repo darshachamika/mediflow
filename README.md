@@ -108,6 +108,14 @@ VALUES ('your-staff-firebase-uid', 'OpdStaff');
 
 Staff routes are `GET /api/opd/queue` and `POST /api/opd/queue/call-next`. A call requires an `Idempotency-Key` and returns `{ "empty": true, "token": null }` when the queue has no waiting tokens. The API remembers empty results too. Use a new key for each new action.
 
+### Doctor rooms and public display
+
+Assign a `Doctor` profile to an active room for the Colombo service date. One room and one doctor can appear only once in a daily assignment. Assigned doctors use `POST /api/opd/rooms/{roomId}/call-next` with an `Idempotency-Key`. A room can hold one active call or consultation at a time. The queue is ordered by check-in time, then token number.
+
+Use `POST /api/opd/rooms/{roomId}/tokens/{bookingId}/{action}` with `start`, `complete`, `no-show`, or `requeue`. A requeue places the token at the back using its new queue entry time. Existing OpdStaff actions remain available for unassigned calls. Only the assigned doctor can change a room consultation.
+
+`GET /api/opd/display` is the public reconnect snapshot. It exposes active token numbers and room names. The SignalR hub at `/hubs/opd` broadcasts the same shape as `DisplayUpdated`. Authenticated clients can invoke `Subscribe` for their authorized `TokenUpdated` or `QueueUpdated` events.
+
 ## Build checks
 
 ```powershell

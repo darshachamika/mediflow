@@ -113,14 +113,19 @@ try {
         'PASS migration upgrade preserved legacy booking and supplied its queue entry time'
     }
     Wait-Http $authUrl $emulator
-    $accounts = foreach ($name in 'patient-a', 'patient-b', 'staff', 'unprovisioned', 'reception') {
+    $accounts = foreach ($name in 'patient-a', 'patient-b', 'staff', 'unprovisioned', 'reception', 'doctor-a', 'doctor-b') {
         $body = @{ email = "$name@example.test"; password = $password; returnSecureToken = $true } | ConvertTo-Json
         Invoke-RestMethod "$authUrl/identitytoolkit.googleapis.com/v1/accounts:signUp?key=demo" -Method Post -ContentType 'application/json' -Body $body
     }
-    $patientA, $patientB, $staff, $unknown, $reception = $accounts.idToken
+    $patientA, $patientB, $staff, $unknown, $reception, $doctorA, $doctorB = $accounts.idToken
     @"
 INSERT INTO app_users(firebase_uid,role) VALUES
-('$($accounts[0].localId)','Patient'),('$($accounts[1].localId)','Patient'),('$($accounts[2].localId)','OpdStaff'),('$($accounts[4].localId)','Reception');
+('$($accounts[0].localId)','Patient'),('$($accounts[1].localId)','Patient'),('$($accounts[2].localId)','OpdStaff'),('$($accounts[4].localId)','Reception'),
+('$($accounts[5].localId)','Doctor'),('$($accounts[6].localId)','Doctor');
+INSERT INTO opd_rooms ("Name","Active") VALUES ('Room A',true),('Room B',true);
+INSERT INTO opd_assignments ("RoomId","DoctorId","OpdDate")
+SELECT 1,id,(now() AT TIME ZONE 'Asia/Colombo')::date FROM app_users WHERE firebase_uid='$($accounts[5].localId)'
+UNION ALL SELECT 2,id,(now() AT TIME ZONE 'Asia/Colombo')::date FROM app_users WHERE firebase_uid='$($accounts[6].localId)';
 INSERT INTO opd_bookings(patient_id,idempotency_key,opd_date,token_number,status,called_at)
 VALUES ((SELECT id FROM app_users WHERE firebase_uid='$($accounts[0].localId)'),'history-a',(now() AT TIME ZONE 'Asia/Colombo')::date-1,1,'Called',now()-interval '1 day'),
        ((SELECT id FROM app_users WHERE firebase_uid='$($accounts[1].localId)'),'history-b',(now() AT TIME ZONE 'Asia/Colombo')::date-1,2,'Waiting',NULL);
@@ -252,6 +257,53 @@ VALUES ((SELECT id FROM app_users WHERE firebase_uid='$($accounts[0].localId)'),
     $lookup = (Read-Response (Send GET "/api/opd/reception/tokens/$($issued.Body.tokenNumber)" $reception)).Body
     Assert ($lookup.status -eq 'Waiting') 'Walk-in must enter Waiting directly.'
     'PASS reception authorization, expired QR, concurrent check-in, manual check-in and walk-in replay'
+
+    $visit = (Read-Response (Send POST $bookings $patientA 'doctor-visit')).Body
+    $null = Read-Response (Send POST $checkIn $reception '' @{ tokenNumber = $visit.tokenNumber })
+    $roomA = '/api/opd/rooms/1'
+    $roomB = '/api/opd/rooms/2'
+    Read-Response (Send POST "$roomA/call-next" $doctorB 'wrong-assignment') 403
+    Read-Response (Send POST "$roomA/call-next" $patientA 'wrong-role') 403
+    $socket = [Net.WebSockets.ClientWebSocket]::new()
+    $socketTimeout = [Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(15))
+    $socket.ConnectAsync([uri]($apiUrl.Replace('http:', 'ws:') + '/hubs/opd'), $socketTimeout.Token).GetAwaiter().GetResult()
+    $handshake = [Text.Encoding]::UTF8.GetBytes('{"protocol":"json","version":1}' + [char]30)
+    $socket.SendAsync([ArraySegment[byte]]::new($handshake), [Net.WebSockets.WebSocketMessageType]::Text, $true, $socketTimeout.Token).GetAwaiter().GetResult()
+    $buffer = [byte[]]::new(8192)
+    function Read-Socket {
+        $packet = $socket.ReceiveAsync([ArraySegment[byte]]::new($buffer), $socketTimeout.Token).GetAwaiter().GetResult()
+        [Text.Encoding]::UTF8.GetString($buffer, 0, $packet.Count)
+    }
+    Assert ((Read-Socket) -match '\{\}') 'SignalR handshake failed.'
+    $claimA = Send POST "$roomA/call-next" $doctorA 'room-call-a'
+    $claimB = Send POST "$roomB/call-next" $doctorB 'room-call-b'
+    $claimRetry = Send POST "$roomA/call-next" $doctorA 'room-call-a'
+    $roomCallA = Read-Response $claimA
+    $roomCallB = Read-Response $claimB
+    Assert ($roomCallA.Raw -ceq (Read-Response $claimRetry).Raw) 'Room call retry mismatch.'
+    Assert ((@($roomCallA.Body.token.tokenNumber, $roomCallB.Body.token.tokenNumber) | Sort-Object) -join ',' -eq '4,5') 'Rooms did not claim distinct FIFO tokens.'
+    Read-Response (Send POST "$roomA/call-next" $doctorA 'room-busy') 409
+    $snapshot = (Read-Response (Send GET '/api/opd/display')).Body
+    Assert ($snapshot.Count -eq 2 -and ($snapshot[0].PSObject.Properties.Name -join ',') -eq 'tokenNumber,room') 'Public snapshot leaked private fields.'
+    $event = Read-Socket
+    Assert ($event -match 'DisplayUpdated' -and $event -match 'tokenNumber' -and $event -notmatch 'patientId|bookingId|doctorId') 'Public SignalR event mismatch.'
+    $socket.Dispose()
+    $roomTokenA = $roomCallA.Body.token.id
+    $roomTokenB = $roomCallB.Body.token.id
+    Read-Response (Send POST "$roomA/tokens/$roomTokenA/complete" $doctorA) 409
+    Read-Response (Send POST "$queue/$roomTokenA/complete" $staff) 409
+    Read-Response (Send POST "$roomB/tokens/$roomTokenA/start" $doctorB) 404
+    $null = Read-Response (Send POST "$roomA/tokens/$roomTokenA/no-show" $doctorA)
+    $null = Read-Response (Send POST "$roomA/tokens/$roomTokenA/requeue" $doctorA)
+    $eventCount = 'SELECT count(*) FROM opd_queue_events WHERE "Action"=''requeue'';' | docker exec -i $container psql -U postgres -tA
+    Assert ($eventCount.Trim() -eq '1') 'Requeue audit event missing.'
+    $start = Send POST "$roomB/tokens/$roomTokenB/start" $doctorB
+    $startRetry = Send POST "$roomB/tokens/$roomTokenB/start" $doctorB
+    Assert ((Read-Response $start).Raw -ceq (Read-Response $startRetry).Raw) 'Concurrent consultation start was not stable.'
+    Read-Response (Send POST "$roomB/tokens/$roomTokenB/no-show" $doctorB) 409
+    $null = Read-Response (Send POST "$roomB/tokens/$roomTokenB/complete" $doctorB)
+    Assert ((Read-Response (Send POST "$roomB/call-next" $doctorB 'recalled')).Body.token.id -eq $roomTokenA) 'Requeued token was not callable.'
+    'PASS doctor assignments, simultaneous room claims, room occupancy, consultation transitions, requeue audit and public snapshot privacy'
 
     if ($Browser) {
         $env:NEXT_PUBLIC_FIREBASE_API_KEY = 'demo-api-key'

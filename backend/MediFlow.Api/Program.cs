@@ -38,7 +38,9 @@ builder.Services.AddAuthorizationBuilder()
         .RequireClaim(FirebaseBearerHandler.AppUserIdClaim))
     .AddPolicy("Patient", policy => policy.RequireRole("Patient"))
     .AddPolicy("OpdStaff", policy => policy.RequireRole("OpdStaff"))
-    .AddPolicy("Reception", policy => policy.RequireRole("Reception"));
+    .AddPolicy("Reception", policy => policy.RequireRole("Reception"))
+    .AddPolicy("Doctor", policy => policy.RequireRole("Doctor"));
+builder.Services.AddSignalR();
 
 var app = builder.Build();
 
@@ -47,8 +49,11 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+app.MapGet("/api/opd/display", DoctorEndpoints.Snapshot);
+app.MapHub<OpdDisplayHub>("/hubs/opd");
 
 var api = app.MapGroup("/api").RequireAuthorization("AppUser");
+api.MapDoctor(ReadIdempotencyKey);
 
 api.MapGet("/me", (ClaimsPrincipal user) => Results.Ok(new
 {
@@ -87,7 +92,9 @@ bookings.MapGet("", async (
                 ? (int?)db.OpdBookings.Count(earlier =>
                     earlier.OpdDate == booking.OpdDate
                     && earlier.Status == OpdBooking.Waiting
-                    && earlier.TokenNumber < booking.TokenNumber)
+                    && (earlier.QueueEnteredAt < booking.QueueEnteredAt
+                        || (earlier.QueueEnteredAt == booking.QueueEnteredAt && earlier.TokenNumber < booking.TokenNumber)
+                        || (earlier.QueueEnteredAt != null && booking.QueueEnteredAt == null)))
                 : null
         })
         .ToListAsync(cancellationToken);
@@ -176,6 +183,7 @@ queue.MapGet("", async (
             booking.Id,
             booking.TokenNumber,
             booking.Status,
+            booking.RoomId,
             booking.CalledAt,
             booking.CompletedAt
         })
@@ -217,7 +225,7 @@ queue.MapPost("/{bookingId:long}/complete", async (
     var target = db.OpdBookings
         .Where(booking => booking.Id == bookingId && booking.OpdDate == today);
 
-    await target.Where(booking => booking.Status == OpdBooking.Called)
+    await target.Where(booking => booking.Status == OpdBooking.Called && booking.RoomId == null)
         .ExecuteUpdateAsync(setters => setters
             .SetProperty(booking => booking.Status, OpdBooking.Completed)
             .SetProperty(booking => booking.CompletedAt, DateTimeOffset.UtcNow),
@@ -229,6 +237,7 @@ queue.MapPost("/{bookingId:long}/complete", async (
             booking.Id,
             booking.TokenNumber,
             booking.Status,
+            booking.RoomId,
             booking.CalledAt,
             booking.CompletedAt
         })

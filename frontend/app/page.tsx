@@ -10,7 +10,7 @@ import { OpdDatePicker } from "./opd-date-picker";
 type Profile = { id: number; firebaseUid: string; role: string };
 type Booking = { id: number; opdDate: string; tokenNumber: number };
 type PatientToken = Booking & {
-  status: "Booked" | "Waiting" | "Called" | "Completed" | "Cancelled";
+  status: "Booked" | "Waiting" | "Called" | "InConsultation" | "Completed" | "Cancelled" | "NoShow";
   calledAt: string | null;
   waitingAhead: number | null;
 };

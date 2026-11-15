@@ -51,6 +51,29 @@ namespace MediFlow.Api.Data.Migrations
                     b.ToTable("app_users", (string)null);
                 });
 
+            modelBuilder.Entity("MediFlow.Api.Data.OpdAssignment", b =>
+                {
+                    b.Property<DateOnly>("OpdDate")
+                        .HasColumnType("date");
+
+                    b.Property<int>("RoomId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("DoctorId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("OpdDate", "RoomId");
+
+                    b.HasIndex("DoctorId");
+
+                    b.HasIndex("RoomId");
+
+                    b.HasIndex("OpdDate", "DoctorId")
+                        .IsUnique();
+
+                    b.ToTable("opd_assignments", (string)null);
+                });
+
             modelBuilder.Entity("MediFlow.Api.Data.OpdBooking", b =>
                 {
                     b.Property<long>("Id")
@@ -79,6 +102,10 @@ namespace MediFlow.Api.Data.Migrations
                         .HasColumnType("timestamp(6) with time zone")
                         .HasColumnName("completed_at");
 
+                    b.Property<int?>("DoctorId")
+                        .HasColumnType("integer")
+                        .HasColumnName("doctor_id");
+
                     b.Property<string>("IdempotencyKey")
                         .IsRequired()
                         .HasMaxLength(128)
@@ -101,6 +128,15 @@ namespace MediFlow.Api.Data.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("queue_entered_at");
 
+                    b.Property<int?>("RoomId")
+                        .HasColumnType("integer")
+                        .HasColumnName("room_id");
+
+                    b.Property<DateTimeOffset?>("StartedAt")
+                        .HasPrecision(6)
+                        .HasColumnType("timestamp(6) with time zone")
+                        .HasColumnName("started_at");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .ValueGeneratedOnAdd()
@@ -118,14 +154,24 @@ namespace MediFlow.Api.Data.Migrations
                     b.HasIndex("CheckInHash")
                         .IsUnique();
 
+                    b.HasIndex("DoctorId");
+
+                    b.HasIndex("RoomId");
+
                     b.HasIndex("IssuedById", "IdempotencyKey")
                         .IsUnique();
+
+                    b.HasIndex("OpdDate", "RoomId")
+                        .IsUnique()
+                        .HasFilter("room_id IS NOT NULL AND status IN ('Called', 'InConsultation')");
 
                     b.HasIndex("OpdDate", "TokenNumber")
                         .IsUnique();
 
                     b.HasIndex("PatientId", "IdempotencyKey")
                         .IsUnique();
+
+                    b.HasIndex("OpdDate", "Status", "QueueEnteredAt", "TokenNumber");
 
                     b.ToTable("opd_bookings", (string)null);
                 });
@@ -175,8 +221,121 @@ namespace MediFlow.Api.Data.Migrations
                     b.ToTable("opd_check_ins", (string)null);
                 });
 
+            modelBuilder.Entity("MediFlow.Api.Data.OpdQueueEvent", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<int>("ActorId")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("At")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<long>("BookingId")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ActorId");
+
+                    b.HasIndex("BookingId");
+
+                    b.ToTable("opd_queue_events", (string)null);
+                });
+
+            modelBuilder.Entity("MediFlow.Api.Data.OpdRoom", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<bool>("Active")
+                        .HasColumnType("boolean");
+
+                    b.Property<int?>("DepartmentId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.ToTable("opd_rooms", (string)null);
+                });
+
+            modelBuilder.Entity("MediFlow.Api.Data.OpdRoomCall", b =>
+                {
+                    b.Property<int>("DoctorId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Key")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<long?>("BookingId")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTimeOffset?>("CalledAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateOnly>("OpdDate")
+                        .HasColumnType("date");
+
+                    b.Property<int>("RoomId")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("TokenNumber")
+                        .HasColumnType("integer");
+
+                    b.HasKey("DoctorId", "Key");
+
+                    b.HasIndex("BookingId");
+
+                    b.HasIndex("RoomId");
+
+                    b.ToTable("opd_room_calls", (string)null);
+                });
+
+            modelBuilder.Entity("MediFlow.Api.Data.OpdAssignment", b =>
+                {
+                    b.HasOne("MediFlow.Api.Data.AppUser", null)
+                        .WithMany()
+                        .HasForeignKey("DoctorId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("MediFlow.Api.Data.OpdRoom", "Room")
+                        .WithMany()
+                        .HasForeignKey("RoomId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Room");
+                });
+
             modelBuilder.Entity("MediFlow.Api.Data.OpdBooking", b =>
                 {
+                    b.HasOne("MediFlow.Api.Data.AppUser", null)
+                        .WithMany()
+                        .HasForeignKey("DoctorId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("MediFlow.Api.Data.AppUser", null)
                         .WithMany()
                         .HasForeignKey("IssuedById")
@@ -185,6 +344,11 @@ namespace MediFlow.Api.Data.Migrations
                     b.HasOne("MediFlow.Api.Data.AppUser", null)
                         .WithMany()
                         .HasForeignKey("PatientId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("MediFlow.Api.Data.OpdRoom", null)
+                        .WithMany()
+                        .HasForeignKey("RoomId")
                         .OnDelete(DeleteBehavior.Restrict);
                 });
 
@@ -219,6 +383,41 @@ namespace MediFlow.Api.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("Booking");
+                });
+
+            modelBuilder.Entity("MediFlow.Api.Data.OpdQueueEvent", b =>
+                {
+                    b.HasOne("MediFlow.Api.Data.AppUser", null)
+                        .WithMany()
+                        .HasForeignKey("ActorId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("MediFlow.Api.Data.OpdBooking", null)
+                        .WithMany()
+                        .HasForeignKey("BookingId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("MediFlow.Api.Data.OpdRoomCall", b =>
+                {
+                    b.HasOne("MediFlow.Api.Data.OpdBooking", null)
+                        .WithMany()
+                        .HasForeignKey("BookingId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("MediFlow.Api.Data.AppUser", null)
+                        .WithMany()
+                        .HasForeignKey("DoctorId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("MediFlow.Api.Data.OpdRoom", null)
+                        .WithMany()
+                        .HasForeignKey("RoomId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 #pragma warning restore 612, 618
         }
