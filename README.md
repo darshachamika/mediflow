@@ -212,7 +212,7 @@ if ($LASTEXITCODE -ne 0) { throw 'pgvector download failed' }
 pwsh -NoProfile -File scripts/Test-OpdV1.ps1 -Upgrade -Vector -VectorPackage $package
 ```
 
-For automated browser verification, install Google Chrome and run the fixture with `-BrowserTest`. It uses a separate Chrome instance and disposable accounts. Port 3097 must be available.
+For automated browser verification, install Google Chrome and run the fixture with `-BrowserTest`. It uses a separate Chrome instance, disposable accounts, and a free local port.
 
 ```powershell
 npm.cmd --prefix frontend ci
@@ -221,7 +221,7 @@ pwsh -NoProfile -File scripts/Test-OpdV1.ps1 -BrowserTest
 
 The test uploads the generated QR image into Reception, checks in the patient, issues a walk-in, calls and completes both tokens in the same assigned room, and forces a SignalR reconnection. It checks the print layout and print-button invocation without opening a printer dialog.
 
-For manual browser verification, run the same fixture with `-Browser` in PowerShell. It runs the server assertions and prints the test dates and credentials for the disposable emulator accounts.
+For manual browser verification, run the same fixture with `-Browser` in PowerShell. Port 3097 must be free. The fixture runs the server assertions and prints the test dates and credentials for the disposable emulator accounts.
 
 ```powershell
 npm.cmd --prefix frontend ci
