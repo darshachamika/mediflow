@@ -4,7 +4,8 @@ import { FirebaseError, getApps, initializeApp } from "firebase/app";
 import { browserSessionPersistence, getAuth, initializeAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from "firebase/auth";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { OpdStaffQueue } from "./opd-staff-queue";
-import { calledTime } from "./opd-time";
+import { calledTime, todayOpdDate } from "./opd-time";
+import { OpdDatePicker } from "./opd-date-picker";
 
 type Profile = { id: number; firebaseUid: string; role: string };
 type Booking = { id: number; opdDate: string; tokenNumber: number };
@@ -27,8 +28,10 @@ export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [booking, setBooking] = useState<Booking | null>(null);
-  const [tokens, setTokens] = useState<PatientToken[] | null>(null);
-  const [tokenError, setTokenError] = useState(false);
+  const [tokenSnapshot, setTokenSnapshot] = useState<{ date: string; rows: PatientToken[] } | null>(null);
+  const [tokenFailure, setTokenFailure] = useState<{ date: string; reason: string } | null>(null);
+  const [historyDate, setHistoryDate] = useState<string | null>(null);
+  const abortTokens = useRef<AbortController | null>(null);
   const refreshTokens = useRef<(() => void) | null>(null);
   const [authReady, setAuthReady] = useState(!firebaseConfigured);
   const [message, setMessage] = useState("");
@@ -50,8 +53,10 @@ export default function Home() {
       setAuthReady(true);
       setProfile(null);
       setBooking(null);
-      setTokens(null);
-      setTokenError(false);
+      abortTokens.current?.abort();
+      setTokenSnapshot(null);
+      setTokenFailure(null);
+      setHistoryDate(null);
       setMessage("");
       if (!signedInUser) return;
 
@@ -86,36 +91,57 @@ export default function Home() {
   }, []);
 
   const patient = profile?.role === "Patient" ? user : null;
+  const today = todayOpdDate();
+  const viewingToday = historyDate === null;
+  const selectedDate = historyDate ?? today;
+  const tokens = tokenSnapshot?.date === selectedDate ? tokenSnapshot.rows : null;
+  const tokenError = tokenFailure?.date === selectedDate ? tokenFailure.reason : null;
+
   useEffect(() => {
     if (!patient) return;
     const controller = new AbortController();
+    abortTokens.current = controller;
     const { signal } = controller;
     let inFlight = false;
     let refreshQueued = false;
 
     const refresh = async (queueIfBusy = false) => {
-      if (signal.aborted || document.visibilityState !== "visible") return;
+      if (signal.aborted || (viewingToday && document.visibilityState !== "visible")) return;
       if (inFlight) {
         refreshQueued ||= queueIfBusy;
         return;
       }
 
       inFlight = true;
+      let failure = "Could not reach the MediFlow API.";
       try {
         const token = await patient.getIdToken();
-        const response = await fetch(`${apiUrl}/api/opd/bookings`, {
+        if (signal.aborted) return;
+        const response = await fetch(`${apiUrl}/api/opd/bookings?date=${encodeURIComponent(selectedDate)}`, {
           headers: { Authorization: `Bearer ${token}` },
           cache: "no-store",
           signal,
         });
-        if (!response.ok) throw new Error("Token list request failed");
-        const items: PatientToken[] = await response.json();
+        failure = `The bookings request returned HTTP ${response.status}.`;
+        if (!response.ok) throw new Error(failure);
+
+        failure = "The API did not return valid bookings JSON.";
+        const payload: { opdDate?: unknown; items?: unknown } | null = await response.json();
+        if (signal.aborted) return;
+
+        failure = "The API did not return bookings for the selected date.";
+        if (payload?.opdDate !== selectedDate) throw new Error(failure);
+
+        failure = "The API did not return a bookings array.";
+        if (!Array.isArray(payload.items)) throw new Error(failure);
+        const items: PatientToken[] = payload.items;
+
         if (!signal.aborted) {
-          setTokens(items);
-          setTokenError(false);
+          setTokenSnapshot({ date: selectedDate, rows: items });
+          setTokenFailure(null);
         }
       } catch {
-        if (!signal.aborted) setTokenError(true);
+        if (!signal.aborted) setTokenFailure({ date: selectedDate, reason: failure });
       } finally {
         inFlight = false;
         if (refreshQueued) {
@@ -131,15 +157,25 @@ export default function Home() {
 
     refreshTokens.current = refreshNow;
     refreshNow();
-    const interval = window.setInterval(() => void refresh(), 10_000);
-    document.addEventListener("visibilitychange", refreshNow);
+    const interval = viewingToday ? window.setInterval(() => void refresh(), 10_000) : undefined;
+    if (viewingToday) document.addEventListener("visibilitychange", refreshNow);
     return () => {
       controller.abort();
       window.clearInterval(interval);
       document.removeEventListener("visibilitychange", refreshNow);
       refreshTokens.current = null;
+      abortTokens.current = null;
     };
-  }, [patient]);
+  }, [patient, selectedDate, viewingToday]);
+
+  function selectDate(date: string) {
+    abortTokens.current?.abort();
+    setHistoryDate(date === today ? null : date);
+    setTokenSnapshot(null);
+    setTokenFailure(null);
+    setBooking(null);
+    setMessage("");
+  }
 
   async function handleSignIn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -176,16 +212,16 @@ export default function Home() {
   }
 
   async function handleBooking() {
-    if (!user || profile?.role !== "Patient" || busy) return;
+    if (!patient || !viewingToday || busy) return;
 
     setBusy(true);
     setMessage("");
     setBooking(null);
     try {
-      const pendingKey = `mediflow:opd:${apiUrl}:${user.uid}`;
+      const pendingKey = `mediflow:opd:${apiUrl}:${patient.uid}`;
       const key = sessionStorage.getItem(pendingKey) ?? crypto.randomUUID();
       sessionStorage.setItem(pendingKey, key);
-      const token = await user.getIdToken();
+      const token = await patient.getIdToken();
       const response = await fetch(`${apiUrl}/api/opd/bookings`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Idempotency-Key": key },
@@ -204,12 +240,12 @@ export default function Home() {
   }
 
   async function handleCancel(item: PatientToken) {
-    if (!user || profile?.role !== "Patient" || busy) return;
+    if (!patient || !viewingToday || busy) return;
 
     setBusy(true);
     setMessage("");
     try {
-      const token = await user.getIdToken();
+      const token = await patient.getIdToken();
       const response = await fetch(`${apiUrl}/api/opd/bookings/${item.id}/cancel`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
@@ -247,26 +283,27 @@ export default function Home() {
           )}
           {profile?.role === "Patient" && (
             <>
-              <button type="button" disabled={busy} onClick={handleBooking}>Book OPD token</button>
-              {booking && <p role="status">Booked OPD token {booking.tokenNumber} for {booking.opdDate}</p>}
+              {viewingToday && <button type="button" disabled={busy} onClick={handleBooking}>Book OPD token</button>}
+              {viewingToday && booking && <p role="status">Booked OPD token {booking.tokenNumber} for {booking.opdDate}</p>}
               <section aria-labelledby="today-tokens">
-                <h2 id="today-tokens">Today’s OPD tokens</h2>
+                <h2 id="today-tokens">{viewingToday ? "Today’s OPD tokens" : `OPD tokens for ${selectedDate}`}</h2>
+                <OpdDatePicker date={selectedDate} today={today} disabled={busy} onSelect={selectDate} />
                 {tokens === null && !tokenError && <p role="status">Loading tokens…</p>}
-                {tokenError && <p role="status">{tokens === null ? "Could not load your tokens." : "Could not refresh your tokens. Showing the last update."}</p>}
+                {tokenError && <p role="status">{tokenError}{tokens !== null && " Showing the last update."}</p>}
                 {tokens && (tokens.length === 0 ? (
-                  <p>You have no OPD tokens for today.</p>
+                  <p>You have no OPD tokens for this date.</p>
                 ) : (
                   <ul>
                     {tokens.map((item) => (
                       <li key={item.id}>
                         Token {item.tokenNumber} for <time dateTime={item.opdDate}>{item.opdDate}</time> · {item.status}
-                        {item.status === "Waiting" && item.waitingAhead !== null && (
+                        {viewingToday && item.status === "Waiting" && item.waitingAhead !== null && (
                           <> · {item.waitingAhead === 0 ? "Next in queue" : `${item.waitingAhead} ahead in queue`}</>
                         )}
                         {item.calledAt && (
                           <> at <time dateTime={item.calledAt}>{calledTime.format(new Date(item.calledAt))}</time></>
                         )}
-                        {item.status === "Waiting" && (
+                        {viewingToday && item.status === "Waiting" && (
                           <> <button type="button" disabled={busy} aria-label={`Cancel token ${item.tokenNumber}`}
                             onClick={() => void handleCancel(item)}>Cancel</button></>
                         )}

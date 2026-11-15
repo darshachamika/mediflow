@@ -1,6 +1,7 @@
 import type { User } from "firebase/auth";
 import { useEffect, useRef, useState } from "react";
 import { calledTime, todayOpdDate } from "./opd-time";
+import { OpdDatePicker } from "./opd-date-picker";
 
 type QueueToken = {
   id: number;
@@ -100,7 +101,6 @@ export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) 
 
   function selectDate(date: string) {
     const nextDate = date === today ? null : date;
-    if (!date || date > today || nextDate === historyDate) return;
     abortQueue.current?.abort();
     setHistoryDate(nextDate);
     setSnapshot(null);
@@ -172,12 +172,7 @@ export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) 
   return (
     <section aria-labelledby="staff-queue">
       <h2 id="staff-queue">{viewingToday ? "Today’s OPD queue" : `OPD queue for ${historyDate}`}</h2>
-      <label>
-        Queue date{" "}
-        <input type="date" value={historyDate ?? today} max={today} disabled={actionPending}
-          onChange={(event) => selectDate(event.target.value)} />
-      </label>{" "}
-      <button type="button" disabled={actionPending || viewingToday} onClick={() => selectDate(today)}>Today</button>
+      <OpdDatePicker date={selectedDate} today={today} disabled={actionPending} onSelect={selectDate} />
       {viewingToday && <button type="button" disabled={actionPending || loading} onClick={callNext}>Call next</button>}
       {message && <p role="status">{message}</p>}
       {loading && <p role="status">Loading queue…</p>}

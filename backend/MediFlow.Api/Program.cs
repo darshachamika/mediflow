@@ -54,13 +54,19 @@ api.MapGet("/me", (ClaimsPrincipal user) => Results.Ok(new
 
 var bookings = api.MapGroup("/opd/bookings").RequireAuthorization("Patient");
 
-bookings.MapGet("", async (HttpResponse response, ClaimsPrincipal user,
+bookings.MapGet("", async (
+    HttpRequest request, HttpResponse response, ClaimsPrincipal user,
     MediFlowDbContext db, CancellationToken cancellationToken) =>
 {
     var patientId = int.Parse(user.FindFirstValue(FirebaseBearerHandler.AppUserIdClaim)!);
-    var opdDate = OpdBooking.Today();
+    var today = OpdBooking.Today();
+
+    if (!TryReadOpdDate(request, today, out var opdDate))
+        return InvalidOpdDate();
+
     response.Headers.CacheControl = "no-store";
-    return await db.OpdBookings.AsNoTracking()
+
+    var items = await db.OpdBookings.AsNoTracking()
         .Where(booking => booking.PatientId == patientId && booking.OpdDate == opdDate)
         .OrderBy(booking => booking.TokenNumber)
         .Select(booking => new
@@ -71,16 +77,27 @@ bookings.MapGet("", async (HttpResponse response, ClaimsPrincipal user,
             booking.Status,
             booking.CalledAt,
             booking.CompletedAt,
-            WaitingAhead = booking.Status == OpdBooking.Waiting
-                ? (int?)db.OpdBookings.Count(earlier => earlier.OpdDate == booking.OpdDate
+            WaitingAhead = opdDate == today && booking.Status == OpdBooking.Waiting
+                ? (int?)db.OpdBookings.Count(earlier =>
+                    earlier.OpdDate == booking.OpdDate
                     && earlier.Status == OpdBooking.Waiting
                     && earlier.TokenNumber < booking.TokenNumber)
                 : null
         })
         .ToListAsync(cancellationToken);
+
+    var responseDate = opdDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+    response.Headers["X-Opd-Date"] = responseDate;
+
+    return Results.Ok(new
+    {
+        opdDate = responseDate,
+        items
+    });
 });
 
-bookings.MapPost("", async (HttpRequest request, ClaimsPrincipal user,
+bookings.MapPost("", async (
+    HttpRequest request, ClaimsPrincipal user,
     MediFlowDbContext db, CancellationToken cancellationToken) =>
 {
     var key = ReadIdempotencyKey(request);
@@ -89,21 +106,28 @@ bookings.MapPost("", async (HttpRequest request, ClaimsPrincipal user,
 
     var patientId = int.Parse(user.FindFirstValue(FirebaseBearerHandler.AppUserIdClaim)!);
     var booking = await OpdBooking.CreateOrReplayAsync(db, patientId, key, cancellationToken);
+
     return Results.Ok(new { booking.Id, booking.OpdDate, booking.TokenNumber });
 });
 
-bookings.MapPost("/{bookingId:long}/cancel", async (long bookingId, ClaimsPrincipal user,
+bookings.MapPost("/{bookingId:long}/cancel", async (
+    long bookingId, ClaimsPrincipal user,
     MediFlowDbContext db, CancellationToken cancellationToken) =>
 {
     var patientId = int.Parse(user.FindFirstValue(FirebaseBearerHandler.AppUserIdClaim)!);
-    await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+
+    await using var transaction = await db.Database.BeginTransactionAsync(
+        IsolationLevel.ReadCommitted, cancellationToken);
     await OpdBooking.LockQueueAsync(db, cancellationToken);
 
     var today = OpdBooking.Today();
     var booking = await db.OpdBookings.SingleOrDefaultAsync(
-        item => item.Id == bookingId && item.PatientId == patientId && item.OpdDate == today, cancellationToken);
+        item => item.Id == bookingId && item.PatientId == patientId && item.OpdDate == today,
+        cancellationToken);
+
     if (booking is null)
         return Results.NotFound(new { error = "Booking was not found in today's bookings." });
+
     if (booking.Status != OpdBooking.Waiting && booking.Status != OpdBooking.Cancelled)
         return Results.Conflict(new { error = "Only waiting tokens can be cancelled." });
 
@@ -114,29 +138,50 @@ bookings.MapPost("/{bookingId:long}/cancel", async (long bookingId, ClaimsPrinci
     }
 
     await transaction.CommitAsync(cancellationToken);
-    return Results.Ok(new { booking.Id, booking.OpdDate, booking.TokenNumber, booking.Status, booking.CalledAt, booking.CompletedAt });
+
+    return Results.Ok(new
+    {
+        booking.Id,
+        booking.OpdDate,
+        booking.TokenNumber,
+        booking.Status,
+        booking.CalledAt,
+        booking.CompletedAt
+    });
 });
 
 var queue = api.MapGroup("/opd/queue").RequireAuthorization("OpdStaff");
-queue.MapGet("", async (HttpRequest request, HttpResponse response, MediFlowDbContext db, CancellationToken cancellationToken) =>
+
+queue.MapGet("", async (
+    HttpRequest request, HttpResponse response,
+    MediFlowDbContext db, CancellationToken cancellationToken) =>
 {
     response.Headers.CacheControl = "no-store";
-    var today = OpdBooking.Today();
-    var date = today;
-    if (request.Query.TryGetValue("date", out var dates)
-        && (dates.Count != 1 || !DateOnly.TryParseExact(dates[0], "yyyy-MM-dd",
-            CultureInfo.InvariantCulture, DateTimeStyles.None, out date) || date > today))
-        return Results.BadRequest(new { error = "Use an OPD date in YYYY-MM-DD format on or before today." });
 
-    var items = await db.OpdBookings.AsNoTracking().Where(booking => booking.OpdDate == date)
+    var today = OpdBooking.Today();
+    if (!TryReadOpdDate(request, today, out var date))
+        return InvalidOpdDate();
+
+    var items = await db.OpdBookings.AsNoTracking()
+        .Where(booking => booking.OpdDate == date)
         .OrderBy(booking => booking.TokenNumber)
-        .Select(booking => new { booking.Id, booking.TokenNumber, booking.Status, booking.CalledAt, booking.CompletedAt })
+        .Select(booking => new
+        {
+            booking.Id,
+            booking.TokenNumber,
+            booking.Status,
+            booking.CalledAt,
+            booking.CompletedAt
+        })
         .ToListAsync(cancellationToken);
+
     response.Headers["X-Opd-Date"] = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
     return Results.Ok(items);
 });
 
-queue.MapPost("/call-next", async (HttpRequest request, ClaimsPrincipal user,
+queue.MapPost("/call-next", async (
+    HttpRequest request, ClaimsPrincipal user,
     MediFlowDbContext db, CancellationToken cancellationToken) =>
 {
     var key = ReadIdempotencyKey(request);
@@ -145,42 +190,86 @@ queue.MapPost("/call-next", async (HttpRequest request, ClaimsPrincipal user,
 
     var staffId = int.Parse(user.FindFirstValue(FirebaseBearerHandler.AppUserIdClaim)!);
     var booking = await OpdCallAction.CallNextAsync(db, staffId, key, cancellationToken);
+
     return Results.Ok(new
     {
         empty = booking is null,
-        token = booking is null ? null : new { booking.TokenNumber, Status = OpdBooking.Called, booking.CalledAt, booking.OpdDate }
+        token = booking is null ? null : new
+        {
+            booking.TokenNumber,
+            Status = OpdBooking.Called,
+            booking.CalledAt,
+            booking.OpdDate
+        }
     });
 });
 
-queue.MapPost("/{bookingId:long}/complete", async (long bookingId,
-    MediFlowDbContext db, CancellationToken cancellationToken) =>
+queue.MapPost("/{bookingId:long}/complete", async (
+    long bookingId, MediFlowDbContext db, CancellationToken cancellationToken) =>
 {
     var today = OpdBooking.Today();
-    var target = db.OpdBookings.Where(booking => booking.Id == bookingId && booking.OpdDate == today);
+    var target = db.OpdBookings
+        .Where(booking => booking.Id == bookingId && booking.OpdDate == today);
+
     await target.Where(booking => booking.Status == OpdBooking.Called)
         .ExecuteUpdateAsync(setters => setters
             .SetProperty(booking => booking.Status, OpdBooking.Completed)
-            .SetProperty(booking => booking.CompletedAt, DateTimeOffset.UtcNow), cancellationToken);
+            .SetProperty(booking => booking.CompletedAt, DateTimeOffset.UtcNow),
+            cancellationToken);
 
     var result = await target.AsNoTracking()
-        .Select(booking => new { booking.Id, booking.TokenNumber, booking.Status, booking.CalledAt, booking.CompletedAt })
+        .Select(booking => new
+        {
+            booking.Id,
+            booking.TokenNumber,
+            booking.Status,
+            booking.CalledAt,
+            booking.CompletedAt
+        })
         .SingleOrDefaultAsync(cancellationToken);
+
     if (result is null)
         return Results.NotFound(new { error = "Booking was not found in today's queue." });
+
     if (result.Status != OpdBooking.Completed)
         return Results.Conflict(new { error = "Call this token before completing it." });
+
     return Results.Ok(result);
 });
 
 app.Run();
 
+static bool TryReadOpdDate(HttpRequest request, DateOnly today, out DateOnly date)
+{
+    date = today;
+
+    return !request.Query.TryGetValue("date", out var dates)
+        || (dates.Count == 1
+            && DateOnly.TryParseExact(dates[0], "yyyy-MM-dd",
+                CultureInfo.InvariantCulture, DateTimeStyles.None, out date)
+            && date <= today);
+}
+
+static IResult InvalidOpdDate() =>
+    Results.BadRequest(new
+    {
+        error = "Use an OPD date in YYYY-MM-DD format on or before today."
+    });
+
 static string? ReadIdempotencyKey(HttpRequest request)
 {
     var keys = request.Headers["Idempotency-Key"];
     var key = keys.Count == 1 ? keys[0]?.Trim() : null;
-    return string.IsNullOrEmpty(key) || key.Length > 128 || key.Any(c => c < '!' || c > '~' || c == ',')
-        ? null : key;
+
+    return string.IsNullOrEmpty(key)
+        || key.Length > 128
+        || key.Any(c => c < '!' || c > '~' || c == ',')
+        ? null
+        : key;
 }
 
 static IResult InvalidIdempotencyKey() =>
-    Results.BadRequest(new { error = "Supply one Idempotency-Key of 1–128 visible ASCII characters without commas." });
+    Results.BadRequest(new
+    {
+        error = "Supply one Idempotency-Key of 1–128 visible ASCII characters without commas."
+    });
