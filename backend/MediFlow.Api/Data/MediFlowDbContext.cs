@@ -90,6 +90,16 @@ public sealed class MediFlowDbContext(DbContextOptions<MediFlowDbContext> option
         estimate.HasKey(item => item.BookingId);
         estimate.HasOne(item => item.Booking).WithOne().HasForeignKey<OpdEstimateSample>(item => item.BookingId).OnDelete(DeleteBehavior.Restrict);
 
+        var faq = modelBuilder.Entity<OpdFaqGuide>();
+        faq.ToTable("opd_faq_guides");
+        faq.HasData(
+            new OpdFaqGuide { Id = 1, Title = "OPD arrival and check-in", Keywords = "arrival check checkin reception qr scan booked",
+                Text = "For this demo, take your booked token number or current check-in code to OPD reception. A booked token joins the waiting queue when reception checks it in." },
+            new OpdFaqGuide { Id = 2, Title = "OPD walk-in tokens", Keywords = "walk walkin walkins account print printed paper",
+                Text = "For this demo, reception can issue a printed walk-in token for a visitor without an account. Walk-in tokens enter the waiting queue immediately." },
+            new OpdFaqGuide { Id = 3, Title = "OPD queue display", Keywords = "display screen called room watch queue",
+                Text = "For this demo, the public queue display shows the token number and room when a room calls the token." });
+
         var assignment = modelBuilder.Entity<OpdAssignment>();
         assignment.ToTable("opd_assignments");
         assignment.HasKey(item => new { item.OpdDate, item.RoomId });

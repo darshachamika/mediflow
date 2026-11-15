@@ -1,4 +1,4 @@
-param([switch]$Browser, [switch]$Upgrade)
+param([switch]$Browser, [switch]$Upgrade, [switch]$Vector)
 $ErrorActionPreference = 'Stop'
 
 $root = (Resolve-Path "$PSScriptRoot/..").Path
@@ -24,7 +24,8 @@ $password = 'mediflow-emulator-only'
 $environmentNames = @('ASPNETCORE_ENVIRONMENT', 'DOTNET_ENVIRONMENT', 'FIREBASE_AUTH_EMULATOR_HOST',
     'Firebase__ProjectId', 'GOOGLE_APPLICATION_CREDENTIALS', 'ConnectionStrings__MediFlow', 'Frontend__Origin',
     'NEXT_PUBLIC_FIREBASE_API_KEY', 'NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN', 'NEXT_PUBLIC_FIREBASE_PROJECT_ID',
-    'NEXT_PUBLIC_FIREBASE_APP_ID', 'NEXT_PUBLIC_API_URL', 'NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_URL')
+    'NEXT_PUBLIC_FIREBASE_APP_ID', 'NEXT_PUBLIC_API_URL', 'NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_URL',
+    'OpdFaq__VectorEnabled', 'OpdFaq__ApiKey')
 $savedEnvironment = @{}
 foreach ($key in $environmentNames) { $savedEnvironment[$key] = [Environment]::GetEnvironmentVariable($key) }
 
@@ -78,7 +79,8 @@ try {
     $emulator = Start-Process node -ArgumentList ('"' + $firebaseJs + '" emulators:start --only auth --project ' + $emulatorProject + ' --config firebase.json') `
         -WorkingDirectory $scratch -WindowStyle Hidden -PassThru -RedirectStandardOutput "$scratch/firebase.out" -RedirectStandardError "$scratch/firebase.err"
 
-    docker run -d --rm --name $container -e POSTGRES_PASSWORD=disposable -p 127.0.0.1::5432 postgres:17 | Out-Null
+    $image = if ($Vector) { 'pgvector/pgvector:pg17' } else { 'postgres:17' }
+    docker run -d --rm --name $container -e POSTGRES_PASSWORD=disposable -p 127.0.0.1::5432 $image | Out-Null
     Assert ($LASTEXITCODE -eq 0) 'Could not start disposable PostgreSQL.'
     $databaseStarted = $true
     for ($attempt = 0; $attempt -lt 30; $attempt++) {
@@ -95,6 +97,8 @@ try {
     $env:FIREBASE_AUTH_EMULATOR_HOST = ([uri]$authUrl).Authority
     $env:GOOGLE_APPLICATION_CREDENTIALS = "$scratch/credentials.json"
     $env:Frontend__Origin = $frontendOrigin
+    $env:OpdFaq__VectorEnabled = $Vector.IsPresent.ToString()
+    $env:OpdFaq__ApiKey = ' '
 
     dotnet build $apiProject -c Verification --nologo
     Assert ($LASTEXITCODE -eq 0) 'API build failed.'
@@ -107,6 +111,10 @@ try {
     }
     dotnet ef database update --no-build --configuration Verification --project $apiProject
     Assert ($LASTEXITCODE -eq 0) 'Fresh database migration failed.'
+    if ($Vector) {
+        Get-Content "$root/scripts/Enable-OpdFaqVector.sql" -Raw | docker exec -i $container psql -U postgres -v ON_ERROR_STOP=1
+        Assert ($LASTEXITCODE -eq 0) 'Could not initialize pgvector.'
+    }
     if ($Upgrade) {
         $preserved = docker exec $container psql -U postgres -tAc "SELECT count(*) FROM opd_bookings WHERE idempotency_key='legacy' AND token_number=12 AND status='Waiting' AND queue_entered_at IS NOT NULL"
         Assert ($preserved.Trim() -eq '1') 'Upgrade did not preserve the legacy waiting booking.'
@@ -399,6 +407,26 @@ VALUES ((SELECT id FROM app_users WHERE firebase_uid='$($accounts[0].localId)'),
     $callsForOwner = (Read-Response (Send GET $alerts $calledOwner)).Body
     Assert (@($callsForOwner | Where-Object { $_.kind -eq 'TokenCalled' -and $_.tokenNumber -eq 2 }).Count -eq 1) 'Call replay produced duplicate or missing notification.'
     'PASS admin permissions, room/doctor overlap, audit, outbox delivery, simulated SMS, retry cap and alert ownership'
+
+    $assistant = '/api/opd/assistant/query'
+    $index = '/api/opd/admin/faq/index'
+    Read-Response (Send POST $assistant '' '' @{ kind = 'tokens' }) 401
+    Read-Response (Send POST $assistant $admin '' @{ kind = 'tokens' }) 403
+    Read-Response (Send POST $index $patientA) 403
+    if ($Vector) {
+        Assert ((Read-Response (Send POST $index $admin)).Body.indexed -eq 3) 'Expected three embedded demo sources.'
+    } else { Read-Response (Send POST $index $admin) 409 }
+    $faq = (Read-Response (Send POST $assistant $patientA '' @{ kind = 'faq'; question = 'walkin walk-ins account print printed paper' })).Body
+    $expectedRetrieval = if ($Vector) { 'Pgvector' } else { 'Keywords' }
+    Assert ($faq.grounded -and $faq.retrieval -eq $expectedRetrieval -and $faq.sources[0].source -like 'Synthetic*') 'Expected a sourced demo guide.'
+    $unsupported = (Read-Response (Send POST $assistant $patientA '' @{ kind = 'faq'; question = 'Where is the astronomy telescope?' })).Body
+    Assert (!$unsupported.grounded -and $unsupported.sources.Count -eq 0) 'Unsupported FAQ should fall back.'
+    $assistantTokens = (Read-Response (Send POST $assistant $patientA '' @{ kind = 'tokens'; patientId = 999 })).Body
+    $myTokens = (Read-Response (Send GET $bookings $patientA)).Body
+    Assert (($assistantTokens.items.id -join ',') -eq ($myTokens.items.id -join ',')) 'Assistant token ownership mismatch.'
+    $assistantAppointments = (Read-Response (Send POST $assistant $patientA '' @{ kind = 'appointments'; patientId = 999 })).Body
+    Assert (($assistantAppointments.items.id -join ',') -eq ($appointmentsA.id -join ',')) 'Assistant appointment ownership mismatch.'
+    "PASS practical FAQ sources, fallback, role checks, personal-data isolation and retrieval mode $expectedRetrieval"
 
     if ($Browser) {
         $env:NEXT_PUBLIC_FIREBASE_API_KEY = 'demo-api-key'

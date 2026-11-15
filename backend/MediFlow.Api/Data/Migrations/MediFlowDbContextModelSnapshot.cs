@@ -358,6 +358,54 @@ namespace MediFlow.Api.Data.Migrations
                     b.ToTable("opd_estimate_samples", (string)null);
                 });
 
+            modelBuilder.Entity("MediFlow.Api.Data.OpdFaqGuide", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Keywords")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("opd_faq_guides", (string)null);
+
+                    b.HasData(
+                        new
+                        {
+                            Id = 1,
+                            Keywords = "arrival check checkin reception qr scan booked",
+                            Text = "For this demo, take your booked token number or current check-in code to OPD reception. A booked token joins the waiting queue when reception checks it in.",
+                            Title = "OPD arrival and check-in"
+                        },
+                        new
+                        {
+                            Id = 2,
+                            Keywords = "walk walkin walkins account print printed paper",
+                            Text = "For this demo, reception can issue a printed walk-in token for a visitor without an account. Walk-in tokens enter the waiting queue immediately.",
+                            Title = "OPD walk-in tokens"
+                        },
+                        new
+                        {
+                            Id = 3,
+                            Keywords = "display screen called room watch queue",
+                            Text = "For this demo, the public queue display shows the token number and room when a room calls the token.",
+                            Title = "OPD queue display"
+                        });
+                });
+
             modelBuilder.Entity("MediFlow.Api.Data.OpdLabRequest", b =>
                 {
                     b.Property<long>("Id")

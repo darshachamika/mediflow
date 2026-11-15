@@ -48,6 +48,11 @@ var fallbackMinutes = builder.Configuration.GetValue("OpdEta:FallbackMinutes", 1
 if (!double.IsFinite(fallbackMinutes) || fallbackMinutes is < 1 or > 180)
     throw new InvalidOperationException("OpdEta:FallbackMinutes must be between 1 and 180.");
 builder.Services.AddSingleton(new OpdEta(fallbackMinutes));
+builder.Services.AddHttpClient("opd-faq", client => client.Timeout = TimeSpan.FromSeconds(20));
+builder.Services.AddSingleton<IFaqProvider>(services =>
+    string.IsNullOrWhiteSpace(builder.Configuration["OpdFaq:ApiKey"])
+        ? new DemoFaqProvider()
+        : new HttpFaqProvider(services.GetRequiredService<IHttpClientFactory>(), builder.Configuration));
 
 var app = builder.Build();
 
@@ -63,6 +68,7 @@ var api = app.MapGroup("/api").RequireAuthorization("AppUser");
 api.MapDoctor(ReadIdempotencyKey);
 api.MapClinical();
 api.MapOpdAdministration();
+api.MapAssistant();
 
 api.MapGet("/me", (ClaimsPrincipal user) => Results.Ok(new
 {
@@ -87,27 +93,7 @@ bookings.MapGet("", async (
 
     response.Headers.CacheControl = "no-store";
 
-    var items = await db.OpdBookings.AsNoTracking()
-        .Where(booking => booking.PatientId == patientId && booking.OpdDate == opdDate)
-        .OrderBy(booking => booking.TokenNumber)
-        .Select(booking => new
-        {
-            booking.Id,
-            booking.OpdDate,
-            booking.TokenNumber,
-            booking.Status,
-            booking.CalledAt,
-            booking.CompletedAt,
-            WaitingAhead = opdDate == today && booking.Status == OpdBooking.Waiting
-                ? (int?)db.OpdBookings.Count(earlier =>
-                    earlier.OpdDate == booking.OpdDate
-                    && earlier.Status == OpdBooking.Waiting
-                    && (earlier.QueueEnteredAt < booking.QueueEnteredAt
-                        || (earlier.QueueEnteredAt == booking.QueueEnteredAt && earlier.TokenNumber < booking.TokenNumber)
-                        || (earlier.QueueEnteredAt != null && booking.QueueEnteredAt == null)))
-                : null
-        })
-        .ToListAsync(cancellationToken);
+    var items = await OpdBooking.OwnBookings(db, patientId, opdDate, today).ToListAsync(cancellationToken);
 
     var responseDate = opdDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
     response.Headers["X-Opd-Date"] = responseDate;

@@ -41,6 +41,17 @@ public sealed class OpdBooking
         db.OpdBookings.Where(item => item.OpdDate == date && item.Status == Waiting)
             .OrderBy(item => item.QueueEnteredAt).ThenBy(item => item.TokenNumber);
 
+    internal static IQueryable<PatientBooking> OwnBookings(MediFlowDbContext db, int owner, DateOnly day, DateOnly today) =>
+        db.OpdBookings.AsNoTracking().Where(booking => booking.PatientId == owner && booking.OpdDate == day)
+            .OrderBy(booking => booking.TokenNumber)
+            .Select(booking => new PatientBooking(booking.Id, booking.OpdDate, booking.TokenNumber, booking.Status,
+                booking.CalledAt, booking.CompletedAt, day == today && booking.Status == Waiting
+                    ? db.OpdBookings.Count(earlier => earlier.OpdDate == booking.OpdDate && earlier.Status == Waiting
+                        && (earlier.QueueEnteredAt < booking.QueueEnteredAt
+                            || (earlier.QueueEnteredAt == booking.QueueEnteredAt && earlier.TokenNumber < booking.TokenNumber)
+                            || (earlier.QueueEnteredAt != null && booking.QueueEnteredAt == null)))
+                    : null));
+
     internal static async Task<OpdBooking> CreateOrReplayAsync(
         MediFlowDbContext db, int? patientId, string key, CancellationToken cancellationToken, int? issuedById = null, OpdEta? eta = null)
     {
@@ -77,3 +88,6 @@ public sealed class OpdBooking
         return booking;
     }
 }
+
+internal sealed record PatientBooking(long Id, DateOnly OpdDate, int TokenNumber, string Status,
+    DateTimeOffset? CalledAt, DateTimeOffset? CompletedAt, int? WaitingAhead);

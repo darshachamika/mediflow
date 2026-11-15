@@ -134,6 +134,16 @@ Patient calls and follow-up bookings write an outbox entry in the same database 
 
 `GET /api/opd/bookings/{id}/eta` estimates the wait for the owning patient's current Waiting token. It uses the check-in order, active assigned rooms, occupied rooms, and recent completed consultation durations. Configure the fallback with `OpdEta__FallbackMinutes` (default 12). With no serving rooms the estimate is unavailable. Check-in and walk-in issuance record feature snapshots for later evaluation. Consultation start time provides the eventual outcome.
 
+### Read-only FAQ assistant
+
+`POST /api/opd/assistant/query` accepts a Patient Bearer token and JSON with `kind` set to `faq`, `tokens`, or `appointments`. For FAQ mode supply a general OPD `question`. Answers cite synthetic demo guides. Use reception for unsupported questions and keep personal information out of FAQ prompts. The personal modes return the verified caller's structured records directly from the API without contacting the FAQ provider.
+
+The default is a local, deterministic FAQ provider with keyword retrieval. For vector retrieval, install pgvector on the PostgreSQL instance, apply the EF migrations, and run `scripts/Enable-OpdFaqVector.sql` in pgAdmin Query Tool. Set `OpdFaq__VectorEnabled=true`, then as OpdAdmin call `POST /api/opd/admin/faq/index`. Reindex after changing the embedding model. For a configured HTTP provider, store `OpdFaq:ApiKey` in .NET User Secrets and set `OpdFaq__ProviderUrl`, `OpdFaq__EmbeddingModel`, and `OpdFaq__ChatModel` as applicable. The provider must support the OpenAI-compatible embeddings and chat-completions endpoints.
+
+```powershell
+pwsh -NoProfile -File scripts/Test-OpdV1.ps1 -Vector
+```
+
 ## Build checks
 
 ```powershell
