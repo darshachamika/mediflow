@@ -51,6 +51,63 @@ namespace MediFlow.Api.Data.Migrations
                     b.ToTable("app_users", (string)null);
                 });
 
+            modelBuilder.Entity("MediFlow.Api.Data.OpdAppointment", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<int>("PatientId")
+                        .HasColumnType("integer");
+
+                    b.Property<long>("SlotId")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("VisitId")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PatientId");
+
+                    b.HasIndex("VisitId");
+
+                    b.HasIndex("SlotId", "PatientId")
+                        .IsUnique();
+
+                    b.ToTable("opd_appointments", (string)null);
+                });
+
+            modelBuilder.Entity("MediFlow.Api.Data.OpdAppointmentSlot", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<int>("Capacity")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("DoctorId")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("StartsAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DoctorId", "StartsAt")
+                        .IsUnique();
+
+                    b.ToTable("opd_appointment_slots", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_opd_appointment_slots_capacity", "\"Capacity\" > 0");
+                        });
+                });
+
             modelBuilder.Entity("MediFlow.Api.Data.OpdAssignment", b =>
                 {
                     b.Property<DateOnly>("OpdDate")
@@ -221,6 +278,51 @@ namespace MediFlow.Api.Data.Migrations
                     b.ToTable("opd_check_ins", (string)null);
                 });
 
+            modelBuilder.Entity("MediFlow.Api.Data.OpdLabRequest", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<long>("BookingId")
+                        .HasColumnType("bigint");
+
+                    b.Property<int?>("EnteredBy")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset?>("PublishedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Result")
+                        .HasMaxLength(8000)
+                        .HasColumnType("character varying(8000)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<string>("Test")
+                        .IsRequired()
+                        .HasMaxLength(160)
+                        .HasColumnType("character varying(160)");
+
+                    b.Property<int?>("VerifiedBy")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BookingId");
+
+                    b.HasIndex("EnteredBy");
+
+                    b.HasIndex("VerifiedBy");
+
+                    b.ToTable("opd_lab_requests", (string)null);
+                });
+
             modelBuilder.Entity("MediFlow.Api.Data.OpdQueueEvent", b =>
                 {
                     b.Property<long>("Id")
@@ -312,6 +414,60 @@ namespace MediFlow.Api.Data.Migrations
                     b.ToTable("opd_room_calls", (string)null);
                 });
 
+            modelBuilder.Entity("MediFlow.Api.Data.OpdVisitNote", b =>
+                {
+                    b.Property<long>("BookingId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Notes")
+                        .IsRequired()
+                        .HasMaxLength(16000)
+                        .HasColumnType("character varying(16000)");
+
+                    b.Property<DateTimeOffset?>("PublishedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Summary")
+                        .HasMaxLength(8000)
+                        .HasColumnType("character varying(8000)");
+
+                    b.HasKey("BookingId");
+
+                    b.ToTable("opd_visit_notes", (string)null);
+                });
+
+            modelBuilder.Entity("MediFlow.Api.Data.OpdAppointment", b =>
+                {
+                    b.HasOne("MediFlow.Api.Data.AppUser", null)
+                        .WithMany()
+                        .HasForeignKey("PatientId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("MediFlow.Api.Data.OpdAppointmentSlot", "Slot")
+                        .WithMany()
+                        .HasForeignKey("SlotId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("MediFlow.Api.Data.OpdBooking", null)
+                        .WithMany()
+                        .HasForeignKey("VisitId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Slot");
+                });
+
+            modelBuilder.Entity("MediFlow.Api.Data.OpdAppointmentSlot", b =>
+                {
+                    b.HasOne("MediFlow.Api.Data.AppUser", null)
+                        .WithMany()
+                        .HasForeignKey("DoctorId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("MediFlow.Api.Data.OpdAssignment", b =>
                 {
                     b.HasOne("MediFlow.Api.Data.AppUser", null)
@@ -385,6 +541,25 @@ namespace MediFlow.Api.Data.Migrations
                     b.Navigation("Booking");
                 });
 
+            modelBuilder.Entity("MediFlow.Api.Data.OpdLabRequest", b =>
+                {
+                    b.HasOne("MediFlow.Api.Data.OpdBooking", null)
+                        .WithMany()
+                        .HasForeignKey("BookingId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("MediFlow.Api.Data.AppUser", null)
+                        .WithMany()
+                        .HasForeignKey("EnteredBy")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("MediFlow.Api.Data.AppUser", null)
+                        .WithMany()
+                        .HasForeignKey("VerifiedBy")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
             modelBuilder.Entity("MediFlow.Api.Data.OpdQueueEvent", b =>
                 {
                     b.HasOne("MediFlow.Api.Data.AppUser", null)
@@ -416,6 +591,15 @@ namespace MediFlow.Api.Data.Migrations
                     b.HasOne("MediFlow.Api.Data.OpdRoom", null)
                         .WithMany()
                         .HasForeignKey("RoomId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("MediFlow.Api.Data.OpdVisitNote", b =>
+                {
+                    b.HasOne("MediFlow.Api.Data.OpdBooking", null)
+                        .WithOne()
+                        .HasForeignKey("MediFlow.Api.Data.OpdVisitNote", "BookingId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });

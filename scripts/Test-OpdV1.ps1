@@ -113,15 +113,15 @@ try {
         'PASS migration upgrade preserved legacy booking and supplied its queue entry time'
     }
     Wait-Http $authUrl $emulator
-    $accounts = foreach ($name in 'patient-a', 'patient-b', 'staff', 'unprovisioned', 'reception', 'doctor-a', 'doctor-b') {
+    $accounts = foreach ($name in 'patient-a', 'patient-b', 'staff', 'unprovisioned', 'reception', 'doctor-a', 'doctor-b', 'lab', 'admin') {
         $body = @{ email = "$name@example.test"; password = $password; returnSecureToken = $true } | ConvertTo-Json
         Invoke-RestMethod "$authUrl/identitytoolkit.googleapis.com/v1/accounts:signUp?key=demo" -Method Post -ContentType 'application/json' -Body $body
     }
-    $patientA, $patientB, $staff, $unknown, $reception, $doctorA, $doctorB = $accounts.idToken
+    $patientA, $patientB, $staff, $unknown, $reception, $doctorA, $doctorB, $lab, $admin = $accounts.idToken
     @"
 INSERT INTO app_users(firebase_uid,role) VALUES
 ('$($accounts[0].localId)','Patient'),('$($accounts[1].localId)','Patient'),('$($accounts[2].localId)','OpdStaff'),('$($accounts[4].localId)','Reception'),
-('$($accounts[5].localId)','Doctor'),('$($accounts[6].localId)','Doctor');
+('$($accounts[5].localId)','Doctor'),('$($accounts[6].localId)','Doctor'),('$($accounts[7].localId)','LabStaff'),('$($accounts[8].localId)','OpdAdmin');
 INSERT INTO opd_rooms ("Name","Active") VALUES ('Room A',true),('Room B',true);
 INSERT INTO opd_assignments ("RoomId","DoctorId","OpdDate")
 SELECT 1,id,(now() AT TIME ZONE 'Asia/Colombo')::date FROM app_users WHERE firebase_uid='$($accounts[5].localId)'
@@ -304,6 +304,50 @@ VALUES ((SELECT id FROM app_users WHERE firebase_uid='$($accounts[0].localId)'),
     $null = Read-Response (Send POST "$roomB/tokens/$roomTokenB/complete" $doctorB)
     Assert ((Read-Response (Send POST "$roomB/call-next" $doctorB 'recalled')).Body.token.id -eq $roomTokenA) 'Requeued token was not callable.'
     'PASS doctor assignments, simultaneous room claims, room occupancy, consultation transitions, requeue audit and public snapshot privacy'
+
+    $null = Read-Response (Send POST "$roomB/tokens/$roomTokenA/start" $doctorB)
+    $null = Read-Response (Send POST "$roomB/tokens/$roomTokenA/complete" $doctorB)
+    $clinical = '/api/clinical'
+    $record = "$clinical/visits/$($visit.id)"
+    Read-Response (Send GET $record $doctorA) 404
+    Read-Response (Send GET $record $admin) 403
+    Read-Response (Send GET $record $lab) 403
+    Read-Response (Send GET "$clinical/me/visits") 401
+    $null = Read-Response (Send PUT "$record/note" $doctorB '' @{ notes = 'Private synthetic note'; summary = 'Synthetic visit summary' })
+    Assert ((Read-Response (Send GET "$clinical/me/visits" $patientA)).Raw -eq '[]') 'Draft visit was visible.'
+    $null = Read-Response (Send POST "$record/publish" $doctorB)
+    $summaries = Read-Response (Send GET "$clinical/me/visits" $patientA)
+    Assert ($summaries.Body[0].summary -eq 'Synthetic visit summary' -and $summaries.Raw -notmatch 'Private synthetic note') 'Patient summary leaked notes or was missing.'
+    Assert ((Read-Response (Send GET "$clinical/me/visits" $patientB)).Raw -eq '[]') 'Other patient saw the visit summary.'
+
+    $request = (Read-Response (Send POST "$record/lab" $doctorB '' @{ test = 'Demo panel' })).Body
+    $labRoute = "$clinical/lab/$($request.id)"
+    Read-Response (Send POST "$labRoute/verify" $lab) 409
+    $worklist = (Read-Response (Send GET "$clinical/lab/worklist" $lab)).Body
+    Assert (($worklist[0].PSObject.Properties.Name -join ',') -eq 'id,test,status,result') 'Lab worklist leaked identifiers.'
+    $null = Read-Response (Send PUT "$labRoute/result" $lab '' @{ result = 'Synthetic result' })
+    Read-Response (Send POST "$labRoute/publish" $doctorB) 409
+    $null = Read-Response (Send POST "$labRoute/verify" $lab)
+    Assert ((Read-Response (Send GET "$clinical/me/lab" $patientA)).Raw -eq '[]') 'Unpublished lab result was visible.'
+    Read-Response (Send POST "$labRoute/publish" $doctorA) 404
+    $null = Read-Response (Send POST "$labRoute/publish" $doctorB)
+    Assert ((Read-Response (Send GET "$clinical/me/lab" $patientA)).Body[0].result -eq 'Synthetic result') 'Published lab result missing.'
+    Assert ((Read-Response (Send GET "$clinical/me/lab" $patientB)).Raw -eq '[]') 'Other patient saw the lab result.'
+
+    $secondVisit = (Read-Response (Send POST $bookings $patientB 'second-clinical-visit')).Body
+    $null = Read-Response (Send POST $checkIn $reception '' @{ tokenNumber = $secondVisit.tokenNumber })
+    Assert ((Read-Response (Send POST "$roomB/call-next" $doctorB 'clinical-patient-b')).Body.token.id -eq $secondVisit.id) 'Wrong second clinical visit.'
+    $null = Read-Response (Send POST "$roomB/tokens/$($secondVisit.id)/start" $doctorB)
+    $null = Read-Response (Send POST "$roomB/tokens/$($secondVisit.id)/complete" $doctorB)
+    $slot = (Read-Response (Send POST "$clinical/slots" $doctorB '' @{ startsAt = [DateTimeOffset]::UtcNow.Date.AddDays(2).ToString('o'); capacity = 1 })).Body
+    $slotA = Send POST "$record/follow-up/$($slot.id)" $doctorB
+    $slotB = Send POST "$clinical/visits/$($secondVisit.id)/follow-up/$($slot.id)" $doctorB
+    $slotStatuses = @([int]$slotA.GetAwaiter().GetResult().StatusCode, [int]$slotB.GetAwaiter().GetResult().StatusCode)
+    Assert (($slotStatuses | Sort-Object) -join ',' -eq '200,409') 'Concurrent final slot was not allocated exactly once.'
+    $appointmentsA = (Read-Response (Send GET "$clinical/me/appointments" $patientA)).Body
+    $appointmentsB = (Read-Response (Send GET "$clinical/me/appointments" $patientB)).Body
+    Assert (($appointmentsA.Count + $appointmentsB.Count) -eq 1 -and $appointmentsA.Count -eq [int]($slotStatuses[0] -eq 200)) 'Appointment ownership mismatch.'
+    'PASS consultation privacy, lab state machine and publication, appointment ownership and concurrent final-slot allocation'
 
     if ($Browser) {
         $env:NEXT_PUBLIC_FIREBASE_API_KEY = 'demo-api-key'

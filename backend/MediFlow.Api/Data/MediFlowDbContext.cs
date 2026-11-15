@@ -87,5 +87,33 @@ public sealed class MediFlowDbContext(DbContextOptions<MediFlowDbContext> option
         queueEvent.Property(item => item.Action).HasMaxLength(32);
         queueEvent.HasOne<OpdBooking>().WithMany().HasForeignKey(item => item.BookingId).OnDelete(DeleteBehavior.Restrict);
         queueEvent.HasOne<AppUser>().WithMany().HasForeignKey(item => item.ActorId).OnDelete(DeleteBehavior.Restrict);
+
+        var note = modelBuilder.Entity<OpdVisitNote>();
+        note.ToTable("opd_visit_notes");
+        note.HasKey(item => item.BookingId);
+        note.HasOne<OpdBooking>().WithOne().HasForeignKey<OpdVisitNote>(item => item.BookingId).OnDelete(DeleteBehavior.Restrict);
+        note.Property(item => item.Notes).HasMaxLength(16000);
+        note.Property(item => item.Summary).HasMaxLength(8000);
+
+        var lab = modelBuilder.Entity<OpdLabRequest>();
+        lab.ToTable("opd_lab_requests");
+        lab.HasOne<OpdBooking>().WithMany().HasForeignKey(item => item.BookingId).OnDelete(DeleteBehavior.Restrict);
+        lab.Property(item => item.Test).HasMaxLength(160);
+        lab.Property(item => item.Result).HasMaxLength(8000);
+        lab.Property(item => item.Status).HasMaxLength(16);
+        lab.HasOne<AppUser>().WithMany().HasForeignKey(item => item.EnteredBy).OnDelete(DeleteBehavior.Restrict);
+        lab.HasOne<AppUser>().WithMany().HasForeignKey(item => item.VerifiedBy).OnDelete(DeleteBehavior.Restrict);
+
+        var slot = modelBuilder.Entity<OpdAppointmentSlot>();
+        slot.ToTable("opd_appointment_slots", table => table.HasCheckConstraint("CK_opd_appointment_slots_capacity", "\"Capacity\" > 0"));
+        slot.HasOne<AppUser>().WithMany().HasForeignKey(item => item.DoctorId).OnDelete(DeleteBehavior.Restrict);
+        slot.HasIndex(item => new { item.DoctorId, item.StartsAt }).IsUnique();
+
+        var appointment = modelBuilder.Entity<OpdAppointment>();
+        appointment.ToTable("opd_appointments");
+        appointment.HasOne(item => item.Slot).WithMany().HasForeignKey(item => item.SlotId).OnDelete(DeleteBehavior.Restrict);
+        appointment.HasOne<AppUser>().WithMany().HasForeignKey(item => item.PatientId).OnDelete(DeleteBehavior.Restrict);
+        appointment.HasOne<OpdBooking>().WithMany().HasForeignKey(item => item.VisitId).OnDelete(DeleteBehavior.Restrict);
+        appointment.HasIndex(item => new { item.SlotId, item.PatientId }).IsUnique();
     }
 }

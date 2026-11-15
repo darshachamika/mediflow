@@ -25,7 +25,7 @@ builder.Services.AddSingleton(_ => FirebaseApp.Create(new AppOptions
 
 builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
     policy.WithOrigins(builder.Configuration["Frontend:Origin"]!)
-        .WithMethods("GET", "POST")
+        .WithMethods("GET", "POST", "PUT")
         .WithHeaders("Authorization", "Idempotency-Key", "Content-Type")
         .WithExposedHeaders("X-Opd-Date")));
 
@@ -39,7 +39,8 @@ builder.Services.AddAuthorizationBuilder()
     .AddPolicy("Patient", policy => policy.RequireRole("Patient"))
     .AddPolicy("OpdStaff", policy => policy.RequireRole("OpdStaff"))
     .AddPolicy("Reception", policy => policy.RequireRole("Reception"))
-    .AddPolicy("Doctor", policy => policy.RequireRole("Doctor"));
+    .AddPolicy("Doctor", policy => policy.RequireRole("Doctor"))
+    .AddPolicy("LabStaff", policy => policy.RequireRole("LabStaff"));
 builder.Services.AddSignalR();
 
 var app = builder.Build();
@@ -54,6 +55,7 @@ app.MapHub<OpdDisplayHub>("/hubs/opd");
 
 var api = app.MapGroup("/api").RequireAuthorization("AppUser");
 api.MapDoctor(ReadIdempotencyKey);
+api.MapClinical();
 
 api.MapGet("/me", (ClaimsPrincipal user) => Results.Ok(new
 {

@@ -116,6 +116,14 @@ Use `POST /api/opd/rooms/{roomId}/tokens/{bookingId}/{action}` with `start`, `co
 
 `GET /api/opd/display` is the public reconnect snapshot. It exposes active token numbers and room names. The SignalR hub at `/hubs/opd` broadcasts the same shape as `DisplayUpdated`. Authenticated clients can invoke `Subscribe` for their authorized `TokenUpdated` or `QueueUpdated` events.
 
+### Clinical records and follow-ups
+
+Doctors may read or edit records for visits assigned to them at consultation start or after completion. Save notes and a separate patient summary through `PUT /api/clinical/visits/{visitId}/note` with `notes` and `summary`. Publish the summary after completing the visit with `POST /api/clinical/visits/{visitId}/publish`. Published notes are locked against edits.
+
+The assigned doctor requests a lab test using `POST /api/clinical/visits/{visitId}/lab` with `test`. A `LabStaff` user reads `GET /api/clinical/lab/worklist`, enters `result` with `PUT /api/clinical/lab/{id}/result`, and verifies it with `POST /api/clinical/lab/{id}/verify`. The assigned doctor publishes the verified result with `POST /api/clinical/lab/{id}/publish`.
+
+Doctors create slots with `POST /api/clinical/slots` using a future ISO timestamp with an offset in `startsAt` and a positive `capacity`. To book a follow-up, use `POST /api/clinical/visits/{visitId}/follow-up/{slotId}`. Patients read their own published visit summaries, published lab results, and appointments at `GET /api/clinical/me/visits`, `GET /api/clinical/me/lab`, and `GET /api/clinical/me/appointments`.
+
 ## Build checks
 
 ```powershell
