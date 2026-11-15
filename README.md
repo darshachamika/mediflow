@@ -158,6 +158,19 @@ dotnet run --project tools/eta-ml-experiment -- --csv 'C:\path\outside\repo\eta.
 
 The live API continues to use the C# baseline. Synthetic results are a demonstration of the pipeline.
 
+### C++ queue simulator
+
+With CMake and a C++17 compiler available in PowerShell:
+
+```powershell
+cmake -S tools/queue-simulator -B tools/queue-simulator/obj/cmake
+cmake --build tools/queue-simulator/obj/cmake --config Release
+ctest --test-dir tools/queue-simulator/obj/cmake -C Release --output-on-failure
+& (Get-ChildItem tools/queue-simulator/obj/cmake -Recurse -Filter queue-simulator.exe | Select-Object -First 1).FullName
+```
+
+The CLI uses one fixed synthetic arrival and consultation sequence for both room counts. It reports the median and nearest-rank 90th percentile of waiting time. Its deterministic test checks each wait against a hand-calculated FIFO scenario.
+
 ## Build checks
 
 ```powershell
