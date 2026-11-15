@@ -6,6 +6,11 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { OpdStaffQueue } from "./opd-staff-queue";
 import { calledTime, todayOpdDate } from "./opd-time";
 import { OpdDatePicker } from "./opd-date-picker";
+import { OpdReception } from "./opd-reception";
+import { OpdDoctorRoom } from "./opd-doctor-room";
+import { opdRequest } from "./opd-request";
+import Link from "next/link";
+import QRCode from "qrcode";
 
 type Profile = { id: number; firebaseUid: string; role: string };
 type Booking = { id: number; opdDate: string; tokenNumber: number };
@@ -43,7 +48,7 @@ export default function Home() {
   const [authReady, setAuthReady] = useState(!firebaseConfigured);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
-  const [checkInCode, setCheckInCode] = useState<{ code: string; expiresAt: string } | null>(null);
+  const [checkInCode, setCheckInCode] = useState<{ bookingId: number; image: string; expiresAt: string } | null>(null);
 
   useEffect(() => {
     if (!firebaseConfigured) return;
@@ -227,6 +232,7 @@ export default function Home() {
     setBusy(true);
     setMessage("");
     setBooking(null);
+    setCheckInCode(null);
     try {
       const pendingKey = `mediflow:opd:${apiUrl}:${patient.uid}`;
       const key = sessionStorage.getItem(pendingKey) ?? crypto.randomUUID();
@@ -242,10 +248,22 @@ export default function Home() {
       sessionStorage.removeItem(pendingKey);
       setBooking(assignedBooking);
       refreshTokens.current?.();
+      if (assignedBooking.opdDate === selectedDate) await showQr(patient, assignedBooking.id);
     } catch {
       setMessage("Could not confirm your booking. Select Book OPD token to retry.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function showQr(owner: User, bookingId: number) {
+    try {
+      const { code, expiresAt } = await opdRequest<{ code: string; expiresAt: string }>(
+        owner, apiUrl, `/api/opd/bookings/${bookingId}/check-in-code`, { method: "POST" });
+      const image = await QRCode.toDataURL(code, { width: 220, margin: 4 });
+      setCheckInCode({ bookingId, image, expiresAt });
+    } catch {
+      setMessage("Could not get a check-in QR. You can give reception your token number.");
     }
   }
 
@@ -255,15 +273,7 @@ export default function Home() {
     setCheckInCode(null);
     setMessage("");
     try {
-      const token = await patient.getIdToken();
-      const response = await fetch(`${apiUrl}/api/opd/bookings/${item.id}/check-in-code`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!response.ok) throw new Error("Check-in code request failed");
-      setCheckInCode(await response.json());
-    } catch {
-      setMessage("Could not get a check-in code. You can give reception your token number.");
+      await showQr(patient, item.id);
     } finally {
       setBusy(false);
     }
@@ -299,6 +309,7 @@ export default function Home() {
   return (
     <main>
       <h1>MediFlow</h1>
+      <Link href="/display">Public OPD token display</Link>
       {!authReady ? <p role="status">Restoring sign-in…</p> : user ? (
         <>
           <p>Signed in as {user.email}</p>
@@ -316,7 +327,6 @@ export default function Home() {
             <>
               {viewingToday && <button type="button" disabled={busy} onClick={handleBooking}>Book OPD token</button>}
               {viewingToday && booking && <p role="status">Booked OPD token {booking.tokenNumber} for {booking.opdDate}</p>}
-              {viewingToday && checkInCode && <p>Check-in code <code>{checkInCode.code}</code> expires at {calledTime.format(new Date(checkInCode.expiresAt))}.</p>}
               <section aria-labelledby="today-tokens">
                 <h2 id="today-tokens">{viewingToday ? "Today’s OPD tokens" : `OPD tokens for ${selectedDate}`}</h2>
                 <OpdDatePicker date={selectedDate} today={today} disabled={busy} onSelect={selectDate} />
@@ -336,11 +346,18 @@ export default function Home() {
                           <> at <time dateTime={item.calledAt}>{calledTime.format(new Date(item.calledAt))}</time></>
                         )}
                         {viewingToday && item.status === "Booked" && (
-                          <> <button type="button" disabled={busy} onClick={() => void prepareCheckIn(item)}>Get check-in code</button></>
+                          <> <button type="button" disabled={busy} onClick={() => void prepareCheckIn(item)}>Show check-in QR</button></>
                         )}
                         {viewingToday && (item.status === "Waiting" || item.status === "Booked") && (
                           <> <button type="button" disabled={busy} aria-label={`Cancel token ${item.tokenNumber}`}
                             onClick={() => void handleCancel(item)}>Cancel</button></>
+                        )}
+                        {viewingToday && item.status === "Booked" && checkInCode?.bookingId === item.id
+                          && Date.parse(checkInCode.expiresAt) > Date.now() && (
+                          <figure>
+                            <img src={checkInCode.image} alt={`Check-in QR for token ${item.tokenNumber}`} width={220} height={220} />
+                            <figcaption>Show this QR at reception. Expires at {calledTime.format(new Date(checkInCode.expiresAt))}.</figcaption>
+                          </figure>
                         )}
                       </li>
                     ))}
@@ -350,6 +367,8 @@ export default function Home() {
             </>
           )}
           {profile?.role === "OpdStaff" && <OpdStaffQueue key={user.uid} user={user} apiUrl={apiUrl} />}
+          {profile?.role === "Reception" && <OpdReception key={user.uid} user={user} apiUrl={apiUrl} />}
+          {profile?.role === "Doctor" && <OpdDoctorRoom key={user.uid} user={user} apiUrl={apiUrl} />}
           <button type="button" disabled={busy} onClick={handleSignOut}>Sign out</button>
         </>
       ) : (

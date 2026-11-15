@@ -1,4 +1,4 @@
-param([switch]$Browser, [switch]$Upgrade, [switch]$Vector, [string]$VectorPackage)
+param([switch]$Browser, [switch]$BrowserTest, [switch]$Upgrade, [switch]$Vector, [string]$VectorPackage)
 $ErrorActionPreference = 'Stop'
 if ($VectorPackage) {
     if (!$Vector) { throw '-VectorPackage requires -Vector.' }
@@ -466,7 +466,7 @@ VALUES ((SELECT id FROM app_users WHERE firebase_uid='$($accounts[0].localId)'),
     Assert (($assistantAppointments.items.id -join ',') -eq ($appointmentsA.id -join ',')) 'Assistant appointment ownership mismatch.'
     "PASS practical FAQ sources, fallback, role checks, personal-data isolation and retrieval mode $expectedRetrieval"
 
-    if ($Browser) {
+    if ($Browser -or $BrowserTest) {
         $env:NEXT_PUBLIC_FIREBASE_API_KEY = 'demo-api-key'
         $env:NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN = 'demo-mediflow.firebaseapp.com'
         $env:NEXT_PUBLIC_FIREBASE_PROJECT_ID = $emulatorProject
@@ -479,10 +479,15 @@ VALUES ((SELECT id FROM app_users WHERE firebase_uid='$($accounts[0].localId)'),
         $frontend = Start-Process node -ArgumentList 'node_modules/next/dist/bin/next','start','--port','3097' `
             -WorkingDirectory $frontendDir -WindowStyle Hidden -PassThru -RedirectStandardOutput "$scratch/frontend.out" -RedirectStandardError "$scratch/frontend.err"
         Wait-Http $frontendOrigin $frontend
-        "Browser fixture ready at $frontendOrigin. Use patient-a@example.test, patient-b@example.test, staff@example.test or reception@example.test with password $password."
-        "API: $apiUrl. Auth Emulator: $authUrl."
-        "Populated date $past. Empty date $empty. Press Enter to clean up."
-        $null = Read-Host
+        if ($BrowserTest) {
+            node "$frontendDir/tests/opd-workflow.mjs" $frontendOrigin $apiUrl $password $past $empty
+            Assert ($LASTEXITCODE -eq 0) 'OPD browser assertions failed.'
+        } else {
+            "Browser fixture ready at $frontendOrigin. Use patient-a@example.test, patient-b@example.test, doctor-a@example.test, staff@example.test or reception@example.test with password $password."
+            "API: $apiUrl. Auth Emulator: $authUrl."
+            "Populated date $past. Empty date $empty. Press Enter to clean up."
+            $null = Read-Host
+        }
     }
 } finally {
     if ($patientSocket) { $patientSocket.Dispose() }

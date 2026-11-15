@@ -11,6 +11,17 @@ internal static class DoctorEndpoints
 {
     internal static void MapDoctor(this RouteGroupBuilder api, Func<HttpRequest, string?> readKey)
     {
+        api.MapGet("/opd/rooms/assigned", async (ClaimsPrincipal user, MediFlowDbContext db, CancellationToken ct) =>
+        {
+            var actor = ReceptionEndpoints.UserId(user);
+            var day = OpdBooking.Today();
+            var room = await db.Set<OpdAssignment>().AsNoTracking()
+                .Where(item => item.DoctorId == actor && item.OpdDate == day && item.Room.Active)
+                .Select(item => new { id = item.RoomId, item.Room.Name, item.OpdDate })
+                .SingleOrDefaultAsync(ct);
+            return Results.Ok(new { room });
+        }).RequireAuthorization("Doctor");
+
         var doctor = api.MapGroup("/opd/rooms/{roomId:int}").RequireAuthorization("Doctor");
         doctor.MapGet("", async (int roomId, ClaimsPrincipal user, MediFlowDbContext db, CancellationToken ct) =>
         {

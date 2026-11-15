@@ -83,7 +83,13 @@ Apply the latest migration, then sign in as a provisioned Patient and select **B
 
 `POST /api/opd/bookings` takes a Firebase Bearer token and an `Idempotency-Key` header. It issues a **Booked** token. Repeat the same key as the same patient to retrieve the original token, even after the OPD date changes. Token numbers start at 1 each day in Asia/Colombo.
 
-### Reception check-in
+### Browser OPD workflow
+
+Patients book from the home page and receive a check-in QR for today's Booked token. They can regenerate it from the token list or give reception their token number. Reception can upload a QR image, use a scanner that types its decoded payload into the **Check-in QR code** field, or look up the token number and check it in manually. **Issue walk-in token** creates a printable ticket with its token number and date.
+
+Doctors see their assigned room for today's Colombo date after sign-in. Use **Call next in room**, **Start consultation**, and **Complete consultation** in order. The legacy OpdStaff queue remains available for unassigned calls. The public display at `/display` needs no sign-in. It uses SignalR and gets a fresh snapshot after reconnecting. The Patient date picker shows the completed token in booking history.
+
+### Reception API
 
 Provision a separate Firebase UID in `app_users` with role `Reception`. Patients can give reception their token number or request an opaque check-in code using `POST /api/opd/bookings/{id}/check-in-code`. The code is the QR payload, expires after 15 minutes, and is replaced when a new code is issued.
 
@@ -206,7 +212,16 @@ if ($LASTEXITCODE -ne 0) { throw 'pgvector download failed' }
 pwsh -NoProfile -File scripts/Test-OpdV1.ps1 -Upgrade -Vector -VectorPackage $package
 ```
 
-For manual browser verification, use the same fixture in a PowerShell terminal. Port 3097 must be available. Browser mode runs the server assertions and serves the frontend. You perform the browser checks. The script prints the test dates and the credentials for its disposable emulator accounts.
+For automated browser verification, install Google Chrome and run the fixture with `-BrowserTest`. It uses a separate Chrome instance and disposable accounts. Port 3097 must be available.
+
+```powershell
+npm.cmd --prefix frontend ci
+pwsh -NoProfile -File scripts/Test-OpdV1.ps1 -BrowserTest
+```
+
+The test uploads the generated QR image into Reception, checks in the patient, issues a walk-in, calls and completes both tokens in the same assigned room, and forces a SignalR reconnection. It checks the print layout and print-button invocation without opening a printer dialog.
+
+For manual browser verification, run the same fixture with `-Browser` in PowerShell. It runs the server assertions and prints the test dates and credentials for the disposable emulator accounts.
 
 ```powershell
 npm.cmd --prefix frontend ci
