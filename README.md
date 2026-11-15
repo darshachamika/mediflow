@@ -144,6 +144,20 @@ The default is a local, deterministic FAQ provider with keyword retrieval. For v
 pwsh -NoProfile -File scripts/Test-OpdV1.ps1 -Vector
 ```
 
+### Offline ETA experiment
+
+```powershell
+dotnet run --project tools/eta-ml-experiment
+```
+
+The default dataset is synthetic. The experiment reports held-out mean absolute error in minutes for the exact C# baseline and an ML.NET regression on the same chronological split. Features are captured at check-in. Training excludes visits whose outcome wasn't known by the split. For an approved dataset, run `tools/eta-ml-experiment/export.sql` in pgAdmin and export CSV with column headers. Keep the file outside the repository.
+
+```powershell
+dotnet run --project tools/eta-ml-experiment -- --csv 'C:\path\outside\repo\eta.csv'
+```
+
+The live API continues to use the C# baseline. Synthetic results are a demonstration of the pipeline.
+
 ## Build checks
 
 ```powershell
