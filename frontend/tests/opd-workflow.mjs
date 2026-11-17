@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
+import { capture, checkMobile } from "./suwadora-capture.mjs";
 
 const [origin, apiUrl, password, populatedDate, emptyDate] = process.argv.slice(2);
 assert(origin && apiUrl && password && populatedDate && emptyDate, "Run this test through Test-OpdV1.ps1 -BrowserTest.");
@@ -7,9 +8,14 @@ const browser = await chromium.launch({ channel: "chrome" });
 const timeout = 20_000;
 
 async function signIn(email) {
-  const context = await browser.newContext();
+  const context = await browser.newContext({ viewport: { width: 1440, height: 960 } });
   const page = await context.newPage();
   await page.goto(origin);
+  if (email === "patient-a@example.test") {
+    await page.getByRole("heading", { name: "Sign in", exact: true }).waitFor();
+    await capture(page, "05-sign-in");
+    await checkMobile(page, "patient", [[null, "Sign in", "sign-in"]]);
+  }
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill(password);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
@@ -56,7 +62,7 @@ try {
   const reception = await signIn("reception@example.test");
   const doctor = await signIn("doctor-a@example.test");
   await doctor.getByRole("heading", { name: "Room A" }).waitFor();
-  const display = await (await browser.newContext()).newPage();
+  const display = await (await browser.newContext({ viewport: { width: 1920, height: 1080 } })).newPage();
   let displaySocket;
   let blockReconnect = false;
   const publicEvents = [];
@@ -80,6 +86,8 @@ try {
   await display.getByText("No tokens are currently called.", { exact: true }).waitFor();
 
   const online = await book(patient);
+  await capture(patient, "01-patient-portal");
+  await checkMobile(patient, "patient", [[null, "My OPD visit", "portal"]]);
   const image = await online.qr.getAttribute("src");
   assert.match(image, /^data:image\/png;base64,/);
   await reception.getByLabel("Upload QR image").setInputFiles({
@@ -99,6 +107,10 @@ try {
   assert.equal(walkIn, online.tokenNumber + 1);
   const ticket = reception.getByRole("region", { name: "Walk-in ticket" });
   await ticket.getByText(`Token ${walkIn}`, { exact: true }).waitFor();
+  const shared = reception.getByRole("region", { name: "Shared queue", exact: true });
+  await shared.getByText("Walk-in", { exact: false }).waitFor();
+  await shared.getByText("Online", { exact: false }).first().waitFor();
+  await capture(reception, "02-reception-desk");
   await reception.evaluate(() => { window.print = () => { document.body.dataset.printRequested = "yes"; }; });
   await reception.getByRole("button", { name: "Print token" }).click();
   assert.equal(await reception.locator("body").getAttribute("data-print-requested"), "yes");
@@ -112,6 +124,8 @@ try {
   await doctor.getByRole("button", { name: "Call next in room" }).click();
   await doctor.getByText(`Token ${online.tokenNumber} · Called`, { exact: true }).waitFor();
   await displayRow(display, online.tokenNumber).getByRole("cell", { name: "Room A" }).waitFor();
+  assert(await display.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await capture(display, "04-waiting-hall-1920x1080");
   assert(publicEvents.some((items) => items.some((item) => item.tokenNumber === online.tokenNumber)));
   for (const event of publicEvents) assertPublic(event);
   assert.deepEqual(await display.getByRole("columnheader").allTextContents(), ["Token number", "Room"]);

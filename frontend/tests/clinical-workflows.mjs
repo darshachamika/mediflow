@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
+import { capture, checkMobile } from "./suwadora-capture.mjs";
 
 const [origin, apiUrl, password] = process.argv.slice(2);
 assert(origin && apiUrl && password, "Run this test through Test-OpdV1.ps1 -ClinicalBrowserTest.");
@@ -11,7 +12,7 @@ const testName = "Browser fixture lab panel";
 const result = "Browser fixture result: within synthetic reference range.";
 
 async function signIn(email) {
-  const page = await (await browser.newContext()).newPage();
+  const page = await (await browser.newContext({ viewport: { width: 1440, height: 960 } })).newPage();
   await page.goto(origin);
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill(password);
@@ -38,13 +39,33 @@ async function book(patient) {
 }
 
 async function refreshPatient(page) {
-  const requests = ["visits", "lab", "appointments"].map((resource) =>
-    page.waitForResponse((response) => response.url() === `${clinical}/me/${resource}` && response.ok()));
+  await openPatientScreen(page, "My Visits");
   const view = page.getByRole("region", { name: "My Visits", exact: true });
-  await view.getByRole("button", { name: "Refresh My Visits", exact: true }).click();
-  const responses = await Promise.all(requests);
-  await view.getByRole("button", { name: "Refresh My Visits", exact: true }).waitFor();
+  const refresh = view.getByRole("button", { name: "Refresh My Visits", exact: true });
+  const ready = refresh.and(page.locator("button:enabled"));
+  await ready.waitFor();
+  const [visits, lab, appointments] = await Promise.all([
+    ...["visits", "lab", "appointments"].map((resource) =>
+      page.waitForResponse((response) => response.url() === `${clinical}/me/${resource}`
+        && response.request().method() === "GET")),
+    refresh.click(),
+  ]);
+  const responses = [visits, lab, appointments];
+  for (const response of responses) assert(response.ok(), `GET ${response.url()} returned ${response.status()}`);
+  await ready.waitFor();
   return { view, records: await Promise.all(responses.map((response) => response.json())) };
+}
+
+function openPatientScreen(page, name) {
+  return page.getByRole("navigation", { name: "Patient portal", exact: true })
+    .getByRole("link", { name, exact: true }).click();
+}
+
+async function openPatientLab(page) {
+  await openPatientScreen(page, "Lab results");
+  const view = page.getByRole("region", { name: "Lab Results", exact: true });
+  await view.waitFor();
+  return view;
 }
 
 try {
@@ -77,6 +98,16 @@ try {
   await chart.getByLabel("Test name").fill(testName);
   await chart.getByRole("button", { name: "Request lab test" }).click();
   await chart.getByText(`${testName} · Requested`, { exact: true }).waitFor();
+  const secondPatient = await signIn("patient-b@example.test");
+  const waiting = await book(secondPatient);
+  await reception.getByLabel("Token number", { exact: true }).fill(String(waiting.tokenNumber));
+  await reception.getByRole("button", { name: "Find token" }).click();
+  await reception.getByRole("button", { name: "Check in token" }).click();
+  await reception.getByText(`Token ${waiting.tokenNumber} · Waiting`, { exact: true }).waitFor();
+  await doctor.getByRole("button", { name: "Refresh room", exact: true }).click();
+  const rail = doctor.getByRole("region", { name: "Waiting queue", exact: true });
+  await rail.getByText(`A-${String(waiting.tokenNumber).padStart(3, "0")}`, { exact: true }).waitFor();
+  await capture(doctor, "03-doctor-workspace", { fullPage: true });
   await lab.getByRole("button", { name: "Refresh worklist" }).click();
   const task = lab.getByRole("listitem").filter({ has: lab.getByRole("heading", { name: testName, exact: true }) });
   await task.getByLabel("Lab result").fill(result);
@@ -84,7 +115,7 @@ try {
   await task.getByText(result, { exact: true }).waitFor();
   const enteredOnly = await refreshPatient(patient);
   assert(!enteredOnly.records[1].some((item) => item.test === testName), "An entered, unverified result must stay private.");
-  assert.equal(await enteredOnly.view.getByText(result, { exact: true }).count(), 0);
+  assert.equal(await (await openPatientLab(patient)).getByText(result, { exact: true }).count(), 0);
   await task.getByRole("button", { name: "Verify lab result", exact: true }).click();
   await lab.getByText(`Result verified for ${testName}. The treating doctor can now publish it.`, { exact: true }).waitFor();
   await task.waitFor({ state: "hidden" });
@@ -92,7 +123,7 @@ try {
   await reception.context().close();
   const verifiedOnly = await refreshPatient(patient);
   assert(!verifiedOnly.records[1].some((item) => item.test === testName));
-  assert.equal(await verifiedOnly.view.getByText(result, { exact: true }).count(), 0);
+  assert.equal(await (await openPatientLab(patient)).getByText(result, { exact: true }).count(), 0);
 
   await doctor.getByRole("button", { name: "Complete consultation", exact: true }).click();
   await doctor.getByText(`Completed consultation for token ${booked.tokenNumber}.`, { exact: true }).waitFor();
@@ -113,25 +144,37 @@ try {
   await chart.getByLabel("Slot capacity").fill("2");
   await chart.getByRole("button", { name: "Schedule follow-up", exact: true }).click();
   await chart.getByText(/Follow-up scheduled for/).waitFor();
+  await capture(doctor, "detail-doctor-follow-up", { fullPage: true });
 
   const published = await refreshPatient(patient);
   await published.view.getByText(summary, { exact: true }).waitFor();
-  await published.view.getByText(result, { exact: true }).waitFor();
   assert.equal(await published.view.getByText(note, { exact: true }).count(), 0);
   assert(published.records[0].some((item) => item.visitId === booked.id && item.summary === summary && !("notes" in item)));
   assert(published.records[2].some((item) => Date.parse(item.startsAt) === startsAt.getTime()));
-  const visibleTimes = await published.view.locator("time").evaluateAll((elements) => elements.map((item) => item.dateTime));
+  await capture(patient, "06-my-visits");
+  const labResults = await openPatientLab(patient);
+  await capture(patient, "07-lab-results");
+  await labResults.getByLabel("Test type").selectOption(testName);
+  await labResults.locator("summary").filter({ hasText: testName }).click();
+  await labResults.getByText(result, { exact: true }).waitFor();
+  await capture(patient, "detail-lab-result");
+  await openPatientScreen(patient, "Appointments");
+  const appointments = patient.getByRole("region", { name: "Appointments", exact: true });
+  await appointments.getByText("Next follow-up", { exact: true }).waitFor();
+  const visibleTimes = await appointments.locator("time").evaluateAll((elements) => elements.map((item) => item.dateTime));
   assert(visibleTimes.some((value) => Date.parse(value) === startsAt.getTime()));
+  await capture(patient, "08-appointments");
   console.log("PASS clinical browser: assigned consultation, validation, draft privacy, lab verification without visibility, publication, and Colombo appointment");
 
-  const secondPatient = await signIn("patient-b@example.test");
   const isolated = await refreshPatient(secondPatient);
   assert(!isolated.records[0].some((item) => item.visitId === booked.id));
   assert(!isolated.records[1].some((item) => item.test === testName));
   assert(!isolated.records[2].some((item) => Date.parse(item.startsAt) === startsAt.getTime()));
   assert.equal(await isolated.view.getByText(summary, { exact: true }).count(), 0);
-  assert.equal(await isolated.view.getByText(result, { exact: true }).count(), 0);
+  assert.equal(await (await openPatientLab(secondPatient)).getByText(result, { exact: true }).count(), 0);
+  await openPatientScreen(secondPatient, "My Visits");
   const authorization = await observeAuthorization(secondPatient, `${clinical}/me/visits`, "Refresh My Visits");
+  await openPatientScreen(patient, "My Visits");
   const ownerAuthorization = await observeAuthorization(patient, `${clinical}/me/visits`, "Refresh My Visits");
   const ownerProfile = await patient.request.get(`${apiUrl}/api/me`, { headers: { Authorization: ownerAuthorization } });
   assert.equal(ownerProfile.status(), 200);
@@ -159,6 +202,42 @@ try {
   assert.equal((await otherDoctor.request.get(`${clinical}/visits/${booked.id}`, { headers: { Authorization: otherDoctorAuth } })).status(), 404);
   assert.equal(await otherDoctor.getByLabel("Visit", { exact: true }).locator(`option[value="${booked.id}"]`).count(), 0);
   console.log("PASS clinical browser and direct API: second patient cannot read the summary, lab result or follow-up; other doctor cannot open the visit");
+
+  await openPatientScreen(patient, "Notifications");
+  const notifications = patient.getByRole("region", { name: "Notifications", exact: true });
+  await notifications.getByRole("button", { name: "Refresh notifications", exact: true }).click();
+  const calledNotice = notifications.getByRole("listitem").filter({
+    hasText: `Token ${booked.tokenNumber} called`,
+  });
+  await calledNotice.getByText(/SMS simulated/).first().waitFor();
+  console.log("PASS supporting browser: Patient sees the token-call notification and simulated SMS status");
+  await capture(patient, "10-notifications");
+
+  await openPatientScreen(patient, "FAQ assistant");
+  const faq = patient.getByRole("region", { name: "OPD FAQ assistant", exact: true });
+  await faq.getByLabel("Your question").fill("Can reception print a walk-in token without an account?");
+  await faq.getByRole("button", { name: "Ask", exact: true }).click();
+  await faq.getByText(/reception can issue a printed walk-in token/).waitFor();
+  await faq.getByRole("listitem").filter({ hasText: "OPD walk-in tokens" }).waitFor();
+  console.log("PASS supporting browser: Patient sees the FAQ answer and its source");
+  await capture(patient, "11-faq-assistant");
+  await checkMobile(patient, "patient", [
+    ["My Visits", "My Visits", "my-visits"], ["Lab results", "Lab Results", "lab-results"],
+    ["Appointments", "Appointments", "appointments"], ["Notifications", "Notifications", "notifications"],
+    ["FAQ assistant", "OPD FAQ assistant", "faq-assistant"],
+  ]);
+
+  const admin = await signIn("admin@example.test");
+  const administration = admin.getByRole("region", { name: "OPD administration", exact: true });
+  await administration.getByRole("heading", { name: /^Queue counts \d{4}-\d{2}-\d{2}$/ }).waitFor();
+  await administration.getByRole("listitem").filter({ hasText: "Room C" }).first().waitFor();
+  await administration.getByText("New department", { exact: true }).click();
+  await administration.getByLabel("Department name").fill("Browser fixture department");
+  await administration.getByRole("button", { name: "Add department", exact: true }).click();
+  await administration.getByRole("listitem").filter({ hasText: "Browser fixture department" }).waitFor();
+  await administration.getByText("New department", { exact: true }).click();
+  console.log("PASS supporting browser: OpdAdmin sees queue counts and rooms, and can add a department");
+  await capture(admin, "09-opd-administration");
 } finally {
   await browser.close();
 }

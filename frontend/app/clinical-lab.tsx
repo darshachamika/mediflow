@@ -39,14 +39,14 @@ export function ClinicalLab({ user, apiUrl }: { user: User; apiUrl: string }) {
   }
 
   return (
-    <section aria-labelledby="lab-heading">
+    <section className="suwa-panel" aria-labelledby="lab-heading">
       <h2 id="lab-heading">Laboratory worklist</h2>
       <button type="button" onClick={worklist.refresh} disabled={busy || worklist.loading}>Refresh worklist</button>
       {worklist.loading && <p role="status">Loading lab requests…</p>}
       {worklist.error && <p role="alert">{worklist.error}</p>}
       {worklist.data?.length === 0 && <p>No requests need entry or verification.</p>}
       {!!worklist.data?.length && (
-        <ul>{worklist.data.map((task) => (
+        <ul className="suwa-records">{worklist.data.map((task) => (
           <LabTaskRow key={task.id} task={task} busy={busy || worklist.loading} update={update} />
         ))}</ul>
       )}
@@ -64,7 +64,7 @@ function LabTaskRow({ task, busy, update }: {
   const [result, setResult] = useState("");
 
   return (
-    <li>
+    <li className="suwa-record">
       <h3>{task.test}</h3>
       <p>Request {task.id} · {task.status}</p>
       {task.status === "Requested" ? (

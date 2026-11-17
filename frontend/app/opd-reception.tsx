@@ -2,6 +2,8 @@ import type { User } from "firebase/auth";
 import { useState, type ChangeEvent, type FormEvent } from "react";
 import jsQR from "jsqr";
 import { OpdRequestError, opdRequest } from "./opd-request";
+import { WorkspaceRail } from "./suwadora";
+import { WorkspaceQueue } from "./workspace-queue";
 import "./opd-print.css";
 
 type Ticket = { id: number; tokenNumber: number; opdDate: string };
@@ -15,6 +17,7 @@ export function OpdReception({ user, apiUrl }: { user: User; apiUrl: string }) {
   const [ticket, setTicket] = useState<Ticket | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [revision, setRevision] = useState(0);
 
   async function perform(work: () => Promise<void>) {
     if (busy) return;
@@ -48,6 +51,7 @@ export function OpdReception({ user, apiUrl }: { user: User; apiUrl: string }) {
     });
     if ("tokenNumber" in input) setLookup(result);
     setCode("");
+    setRevision((value) => value + 1);
     setMessage(`Token ${result.tokenNumber} checked in.`);
   }
 
@@ -72,7 +76,7 @@ export function OpdReception({ user, apiUrl }: { user: User; apiUrl: string }) {
         setCode(qr.data);
         setMessage("QR read. Select Check in by QR to confirm.");
       } catch {
-        setMessage("Could not read a MediFlow check-in QR from this image.");
+        setMessage("Could not read a SuwaDora check-in QR from this image.");
       } finally {
         image?.close();
       }
@@ -89,22 +93,35 @@ export function OpdReception({ user, apiUrl }: { user: User; apiUrl: string }) {
       });
       sessionStorage.removeItem(pending);
       setTicket(issued);
+      setRevision((value) => value + 1);
       setMessage(`Walk-in token ${issued.tokenNumber} issued.`);
     });
   }
 
   return (
-    <section aria-labelledby="reception-heading">
-      <h2 id="reception-heading">OPD reception</h2>
+    <div className="suwa-workspace suwa-reception">
+    <WorkspaceRail><nav aria-label="Reception desk">
+      <a href="#reception-heading" aria-current="page">Reception</a>
+      <a href="#reception-lookup">Find token</a>
+      <a href="#walk-in">Walk-in token</a>
+    </nav></WorkspaceRail>
+    <section className="suwa-workspace-main" aria-labelledby="reception-heading">
+      <div className="suwa-workspace-heading"><h1 id="reception-heading">OPD reception</h1><span>Reception workstation</span></div>
+      <div className="suwa-reception-grid">
+      <div>
+      <div className="suwa-card suwa-check-in">
       <form onSubmit={(event) => {
         event.preventDefault();
         void perform(() => checkIn({ code: code.trim() }));
       }}>
+        <h2>Scan QR</h2>
         <p><label>Check-in QR code <input value={code} onChange={(event) => setCode(event.target.value)} required /></label></p>
         <p><label>Upload QR image <input type="file" accept="image/*" onChange={readQr} disabled={busy} /></label></p>
         <button type="submit" disabled={busy || !code.trim()}>Check in by QR</button>
       </form>
+      <div id="reception-lookup">
       <form onSubmit={findToken}>
+        <h2>Manual lookup</h2>
         <p><label>Token number <input type="number" min="1" step="1" value={number} required onChange={(event) => {
           setNumber(event.target.value);
           setLookup(null);
@@ -118,19 +135,28 @@ export function OpdReception({ user, apiUrl }: { user: User; apiUrl: string }) {
           )}
         </p>
       )}
-      <h3>Walk-in</h3>
-      <button type="button" disabled={busy} onClick={issueWalkIn}>Issue walk-in token</button>
+      </div>
+      </div>
+      <section id="walk-in" className="suwa-card suwa-walk-in">
+      <h2>Walk-in token</h2>
+      <p>Issue a General OPD token for a patient who arrived without an online booking.</p>
+      <button className="suwa-gold" type="button" disabled={busy} onClick={issueWalkIn}>Issue walk-in token</button>
       {ticket && (
         <>
           <section className="opd-print-ticket" aria-label="Walk-in ticket">
-            <h4>MediFlow OPD</h4>
+            <h4>SuwaDora OPD</h4>
             <p>Token {ticket.tokenNumber}</p>
             <p><time dateTime={ticket.opdDate}>{ticket.opdDate}</time></p>
           </section>
           <button type="button" onClick={() => window.print()}>Print token</button>
         </>
       )}
+      </section>
       {message && <p role="status">{message}</p>}
+      </div>
+      <WorkspaceQueue user={user} apiUrl={apiUrl} revision={revision} />
+      </div>
     </section>
+    </div>
   );
 }
