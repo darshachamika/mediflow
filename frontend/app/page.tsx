@@ -67,6 +67,12 @@ export default function Home() {
   const [passwordVisible, setPasswordVisible] = useState(false);
 
   useEffect(() => {
+    if (!checkInCode) return;
+    const timer = window.setTimeout(() => setCheckInCode(null), Math.max(0, Date.parse(checkInCode.expiresAt) - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [checkInCode]);
+
+  useEffect(() => {
     function readScreen() {
       setScreen(patientScreens.find(([id]) => `#${id}` === window.location.hash)?.[0] ?? "today-tokens");
     }
@@ -285,7 +291,7 @@ export default function Home() {
     try {
       const { code, expiresAt } = await opdRequest<{ code: string; expiresAt: string }>(
         owner, apiUrl, `/api/opd/bookings/${bookingId}/check-in-code`, { method: "POST" });
-      const image = await QRCode.toDataURL(code, { width: 220, margin: 4 });
+      const image = await QRCode.toDataURL(code, { scale: 12, margin: 4, color: { dark: "#000000", light: "#ffffff" } });
       setCheckInCode({ bookingId, image, expiresAt });
     } catch {
       setMessage("Could not get a check-in QR. You can give reception your token number.");

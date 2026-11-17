@@ -107,6 +107,7 @@ try {
   await doctor.getByRole("button", { name: "Refresh room", exact: true }).click();
   const rail = doctor.getByRole("region", { name: "Waiting queue", exact: true });
   await rail.getByText(`A-${String(waiting.tokenNumber).padStart(3, "0")}`, { exact: true }).waitFor();
+  await doctor.getByText(`Token ${booked.tokenNumber} · In consultation`, { exact: true }).waitFor();
   await capture(doctor, "03-doctor-workspace", { fullPage: true });
   await lab.getByRole("button", { name: "Refresh worklist" }).click();
   const task = lab.getByRole("listitem").filter({ has: lab.getByRole("heading", { name: testName, exact: true }) });

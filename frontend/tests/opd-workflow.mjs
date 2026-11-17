@@ -174,6 +174,69 @@ try {
   await patient.getByRole("button", { name: `Cancel token ${manual.tokenNumber}`, exact: true }).click();
   await tokenStatus(patient, manual.tokenNumber, "Cancelled");
   console.log("PASS browser: populated and empty patient history, Completed on Today, walk-in isolation, manual lookup and check-in");
+
+  const scan = await book(patient);
+  const scanImage = await scan.qr.getAttribute("src");
+  await reception.bringToFront();
+  await reception.evaluate(async (src) => {
+    const image = new Image();
+    image.src = src;
+    await image.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = 640;
+    canvas.height = 480;
+    const context = canvas.getContext("2d");
+    context.imageSmoothingEnabled = false;
+    const frames = { denied: true, stream: null, constraints: null, showCode: false };
+    window.fixtureCamera = frames;
+    navigator.mediaDevices.getUserMedia = async (constraints) => {
+      if (frames.denied) throw new DOMException("Consent declined", "NotAllowedError");
+      frames.constraints = constraints;
+      const stream = canvas.captureStream(15);
+      frames.stream = stream;
+      const timer = setInterval(() => {
+        if (!stream.active) return clearInterval(timer);
+        context.fillStyle = "white";
+        context.fillRect(0, 0, 640, 480);
+        if (frames.showCode) context.drawImage(image, 140, 60, 360, 360);
+      }, 65);
+      return stream;
+    };
+  }, scanImage);
+  const startCamera = reception.getByRole("button", { name: "Start camera", exact: true });
+  const confirm = reception.getByRole("button", { name: "Check in by QR", exact: true });
+  await startCamera.click();
+  await reception.getByText(/Camera permission denied/).waitFor();
+  assert(await confirm.isDisabled());
+
+  await reception.evaluate(() => { window.fixtureCamera.denied = false; });
+  await startCamera.click();
+  await reception.getByText(/Center the patient's QR code/).waitFor();
+  await reception.getByText(/No readable SuwaDora check-in QR yet/).waitFor({ timeout: 15_000 });
+  assert(await confirm.isDisabled());
+  await reception.getByRole("navigation", { name: "Reception desk" }).getByRole("link", { name: "Find token" }).click();
+  assert(await reception.evaluate(() => !window.fixtureCamera.stream.active));
+
+  let checkIns = 0;
+  const scanEndpoint = `${apiUrl}/api/opd/reception/check-in`;
+  reception.on("request", (request) => {
+    if (request.method() === "POST" && request.url() === scanEndpoint) checkIns++;
+  });
+  await startCamera.click();
+  await reception.getByText(/Center the patient's QR code/).waitFor();
+  await reception.evaluate(() => { window.fixtureCamera.showCode = true; });
+  await reception.getByText("QR read. Select Check in by QR to confirm.", { exact: true }).waitFor();
+  assert.equal(checkIns, 0, "A camera read must wait for staff confirmation");
+  assert(await reception.evaluate(() => !window.fixtureCamera.stream.active));
+  assert.equal(await reception.evaluate(() => window.fixtureCamera.constraints.video.facingMode.ideal), "environment");
+  await confirm.click();
+  await reception.getByText(`Token ${scan.tokenNumber} checked in.`, { exact: true }).waitFor();
+  assert.equal(checkIns, 1);
+  await patient.bringToFront();
+  await tokenStatus(patient, scan.tokenNumber, "Waiting");
+  await patient.getByRole("button", { name: `Cancel token ${scan.tokenNumber}`, exact: true }).click();
+  await tokenStatus(patient, scan.tokenNumber, "Cancelled");
+  console.log("PASS browser: simulated live camera, permission denial, unreadable frames, cleanup, explicit confirmation and fresh QR check-in");
 } finally {
   await browser.close();
 }

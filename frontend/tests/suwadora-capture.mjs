@@ -9,6 +9,16 @@ export async function capture(page, name, { fullPage = false } = {}) {
   await mkdir(directory, { recursive: true });
   await page.evaluate(async () => {
     await document.fonts.ready;
+    const artwork = Array.from(document.querySelectorAll(".suwa-sign-art, .suwa-reception-header, .suwa-rail, .suwa-board-frame"))
+      .flatMap((element) => Array.from(getComputedStyle(element).backgroundImage.matchAll(/url\("([^"]+)"\)/g), (match) => match[1]));
+    await Promise.all([
+      ...Array.from(document.images).filter((image) => image.getClientRects().length > 0).map((image) => image.decode()),
+      ...artwork.map((url) => {
+        const image = new Image();
+        image.src = url;
+        return image.decode();
+      }),
+    ]);
     window.scrollTo(0, 0);
   });
   const viewport = page.viewportSize();
