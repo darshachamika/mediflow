@@ -6,7 +6,8 @@ import { OpdDatePicker } from "./opd-date-picker";
 type QueueToken = {
   id: number;
   tokenNumber: number;
-  status: "Waiting" | "Called" | "Completed" | "Cancelled";
+  status: "Booked" | "Waiting" | "Called" | "InConsultation" | "Completed" | "Cancelled" | "NoShow";
+  roomId: number | null;
   calledAt: string | null;
   completedAt: string | null;
 };
@@ -158,9 +159,10 @@ export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) 
   const loadError = failedDate === selectedDate;
   const queue = loadedQueue ?? [];
   const loading = loadedQueue === null && !loadError;
-  // Completed tokens still count toward the call history.
-  const lastCalled = queue.findLast((item) => item.calledAt !== null);
-  const counts = { Waiting: 0, Called: 0, Completed: 0, Cancelled: 0 };
+  const lastCalled = queue.reduce<QueueToken | undefined>((latest, item) =>
+    item.calledAt && (!latest?.calledAt || Date.parse(item.calledAt) > Date.parse(latest.calledAt)) ? item : latest,
+    undefined);
+  const counts = { Booked: 0, Waiting: 0, Called: 0, InConsultation: 0, Completed: 0, Cancelled: 0, NoShow: 0 };
   for (const item of queue) {
     counts[item.status]++;
   }
@@ -216,7 +218,7 @@ export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) 
                     <td>{item.tokenNumber}</td>
                     <td>{item.status}</td>
                     <td>{item.calledAt && <time dateTime={item.calledAt}>{calledTime.format(new Date(item.calledAt))}</time>}</td>
-                    {viewingToday && <td>{item.status === "Called" && (
+                    {viewingToday && <td>{item.status === "Called" && item.roomId === null && (
                       <button type="button" disabled={calling || completing !== null}
                         aria-label={`Complete token ${item.tokenNumber}`} onClick={() => void complete(item)}>
                         {completing === item.id ? "Completing…" : "Complete"}

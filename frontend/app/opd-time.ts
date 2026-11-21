@@ -15,3 +15,9 @@ const opdDateFormat = new Intl.DateTimeFormat("en-CA", {
 export function todayOpdDate() {
   return opdDateFormat.format(new Date());
 }
+
+export const opdDateTime = new Intl.DateTimeFormat(undefined, {
+  timeZone: "Asia/Colombo",
+  dateStyle: "medium",
+  timeStyle: "short",
+});

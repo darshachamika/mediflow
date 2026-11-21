@@ -1,0 +1,14 @@
+@media print {
+  body:has(.opd-print-ticket) * {
+    visibility: hidden;
+  }
+
+  body .opd-print-ticket, body .opd-print-ticket * {
+    visibility: visible;
+  }
+
+  .opd-print-ticket {
+    position: absolute;
+    inset: 0 auto auto 0;
+  }
+}

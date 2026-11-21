@@ -1,4 +1,5 @@
 using FirebaseAdmin;
+using MediFlow.Api;
 using Google.Apis.Auth.OAuth2;
 using MediFlow.Api.Auth;
 using MediFlow.Api.Data;
@@ -9,6 +10,9 @@ using System.Globalization;
 using System.Security.Claims;
 
 var builder = WebApplication.CreateBuilder(args);
+if (!builder.Environment.IsDevelopment()
+    && !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("FIREBASE_AUTH_EMULATOR_HOST")))
+    throw new InvalidOperationException("Firebase Auth Emulator is only supported in Development.");
 
 builder.Services.AddDbContext<MediFlowDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("MediFlow")));
@@ -21,8 +25,8 @@ builder.Services.AddSingleton(_ => FirebaseApp.Create(new AppOptions
 
 builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
     policy.WithOrigins(builder.Configuration["Frontend:Origin"]!)
-        .WithMethods("GET", "POST")
-        .WithHeaders("Authorization", "Idempotency-Key")
+        .WithMethods("GET", "POST", "PUT")
+        .WithHeaders("Authorization", "Idempotency-Key", "Content-Type")
         .WithExposedHeaders("X-Opd-Date")));
 
 builder.Services.AddAuthentication(FirebaseBearerHandler.SchemeName)
@@ -33,7 +37,30 @@ builder.Services.AddAuthorizationBuilder()
     .AddPolicy("AppUser", policy => policy.RequireAuthenticatedUser()
         .RequireClaim(FirebaseBearerHandler.AppUserIdClaim))
     .AddPolicy("Patient", policy => policy.RequireRole("Patient"))
-    .AddPolicy("OpdStaff", policy => policy.RequireRole("OpdStaff"));
+    .AddPolicy("OpdStaff", policy => policy.RequireRole("OpdStaff"))
+    .AddPolicy("Reception", policy => policy.RequireRole("Reception"))
+    .AddPolicy("Doctor", policy => policy.RequireRole("Doctor"))
+    .AddPolicy("LabStaff", policy => policy.RequireRole("LabStaff"))
+    .AddPolicy("OpdAdmin", policy => policy.RequireRole("OpdAdmin"));
+builder.Services.AddSignalR();
+builder.Services.AddHostedService<OpdNotificationWorker>();
+var fallbackMinutes = builder.Configuration.GetValue("OpdEta:FallbackMinutes", 12d);
+if (!double.IsFinite(fallbackMinutes) || fallbackMinutes is < 1 or > 180)
+    throw new InvalidOperationException("OpdEta:FallbackMinutes must be between 1 and 180.");
+builder.Services.AddSingleton(new OpdEta(fallbackMinutes));
+builder.Services.AddSingleton(services =>
+{
+    var model = new EtaPredictor(builder.Configuration["OpdEta:ModelDirectory"],
+        builder.Configuration.GetValue("OpdEta:ModelEnabled", false),
+        builder.Environment.IsDevelopment() && builder.Configuration.GetValue("OpdEta:AllowSyntheticModel", false));
+    services.GetRequiredService<ILogger<EtaPredictor>>().LogInformation("OPD ETA model state {State}", model.State);
+    return model;
+});
+builder.Services.AddHttpClient("opd-faq", client => client.Timeout = TimeSpan.FromSeconds(20));
+builder.Services.AddSingleton<IFaqProvider>(services =>
+    string.IsNullOrWhiteSpace(builder.Configuration["OpdFaq:ApiKey"])
+        ? new DemoFaqProvider()
+        : new HttpFaqProvider(services.GetRequiredService<IHttpClientFactory>(), builder.Configuration));
 
 var app = builder.Build();
 
@@ -42,8 +69,14 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+app.MapGet("/api/opd/display", DoctorEndpoints.Snapshot);
+app.MapHub<OpdDisplayHub>("/hubs/opd");
 
 var api = app.MapGroup("/api").RequireAuthorization("AppUser");
+api.MapDoctor(ReadIdempotencyKey);
+api.MapClinical();
+api.MapOpdAdministration();
+api.MapAssistant();
 
 api.MapGet("/me", (ClaimsPrincipal user) => Results.Ok(new
 {
@@ -53,6 +86,8 @@ api.MapGet("/me", (ClaimsPrincipal user) => Results.Ok(new
 }));
 
 var bookings = api.MapGroup("/opd/bookings").RequireAuthorization("Patient");
+api.MapReception(bookings, ReadIdempotencyKey);
+bookings.MapEta();
 
 bookings.MapGet("", async (
     HttpRequest request, HttpResponse response, ClaimsPrincipal user,
@@ -66,25 +101,7 @@ bookings.MapGet("", async (
 
     response.Headers.CacheControl = "no-store";
 
-    var items = await db.OpdBookings.AsNoTracking()
-        .Where(booking => booking.PatientId == patientId && booking.OpdDate == opdDate)
-        .OrderBy(booking => booking.TokenNumber)
-        .Select(booking => new
-        {
-            booking.Id,
-            booking.OpdDate,
-            booking.TokenNumber,
-            booking.Status,
-            booking.CalledAt,
-            booking.CompletedAt,
-            WaitingAhead = opdDate == today && booking.Status == OpdBooking.Waiting
-                ? (int?)db.OpdBookings.Count(earlier =>
-                    earlier.OpdDate == booking.OpdDate
-                    && earlier.Status == OpdBooking.Waiting
-                    && earlier.TokenNumber < booking.TokenNumber)
-                : null
-        })
-        .ToListAsync(cancellationToken);
+    var items = await OpdBooking.OwnBookings(db, patientId, opdDate, today).ToListAsync(cancellationToken);
 
     var responseDate = opdDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
     response.Headers["X-Opd-Date"] = responseDate;
@@ -128,10 +145,10 @@ bookings.MapPost("/{bookingId:long}/cancel", async (
     if (booking is null)
         return Results.NotFound(new { error = "Booking was not found in today's bookings." });
 
-    if (booking.Status != OpdBooking.Waiting && booking.Status != OpdBooking.Cancelled)
-        return Results.Conflict(new { error = "Only waiting tokens can be cancelled." });
+    if (booking.Status is not (OpdBooking.Booked or OpdBooking.Waiting or OpdBooking.Cancelled))
+        return Results.Conflict(new { error = "Only booked or waiting tokens can be cancelled." });
 
-    if (booking.Status == OpdBooking.Waiting)
+    if (booking.Status is OpdBooking.Waiting or OpdBooking.Booked)
     {
         booking.Status = OpdBooking.Cancelled;
         await db.SaveChangesAsync(cancellationToken);
@@ -152,6 +169,27 @@ bookings.MapPost("/{bookingId:long}/cancel", async (
 
 var queue = api.MapGroup("/opd/queue").RequireAuthorization("OpdStaff");
 
+api.MapGet("/opd/workspace-queue", async (ClaimsPrincipal user, MediFlowDbContext db, CancellationToken ct) =>
+{
+    var today = OpdBooking.Today();
+    var isDoctor = user.IsInRole("Doctor");
+    if (isDoctor)
+    {
+        var actor = ReceptionEndpoints.UserId(user);
+        if (!await db.Set<OpdAssignment>().AnyAsync(item => item.DoctorId == actor && item.OpdDate == today && item.Room.Active, ct))
+            return Results.Forbid();
+    }
+
+    var rows = isDoctor ? OpdBooking.WaitingQueue(db, today) : db.OpdBookings
+        .Where(item => item.OpdDate == today && (item.Status == OpdBooking.Booked || item.Status == OpdBooking.Waiting
+            || item.Status == OpdBooking.Called || item.Status == OpdBooking.InConsultation))
+        .OrderBy(item => item.QueueEnteredAt).ThenBy(item => item.TokenNumber);
+
+    return Results.Ok(await rows.AsNoTracking()
+        .Select(item => new { item.TokenNumber, item.Status, channel = item.IssuedById == null ? "Online" : "Walk-in" })
+        .ToListAsync(ct));
+}).RequireAuthorization(policy => policy.RequireRole("Reception", "Doctor"));
+
 queue.MapGet("", async (
     HttpRequest request, HttpResponse response,
     MediFlowDbContext db, CancellationToken cancellationToken) =>
@@ -170,6 +208,7 @@ queue.MapGet("", async (
             booking.Id,
             booking.TokenNumber,
             booking.Status,
+            booking.RoomId,
             booking.CalledAt,
             booking.CompletedAt
         })
@@ -211,7 +250,7 @@ queue.MapPost("/{bookingId:long}/complete", async (
     var target = db.OpdBookings
         .Where(booking => booking.Id == bookingId && booking.OpdDate == today);
 
-    await target.Where(booking => booking.Status == OpdBooking.Called)
+    await target.Where(booking => booking.Status == OpdBooking.Called && booking.RoomId == null)
         .ExecuteUpdateAsync(setters => setters
             .SetProperty(booking => booking.Status, OpdBooking.Completed)
             .SetProperty(booking => booking.CompletedAt, DateTimeOffset.UtcNow),
@@ -223,6 +262,7 @@ queue.MapPost("/{bookingId:long}/complete", async (
             booking.Id,
             booking.TokenNumber,
             booking.Status,
+            booking.RoomId,
             booking.CalledAt,
             booking.CompletedAt
         })

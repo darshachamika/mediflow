@@ -22,8 +22,7 @@ public sealed class OpdCallAction
             return previous.Booking;
 
         var today = OpdBooking.Today();
-        var next = await db.OpdBookings.Where(booking => booking.OpdDate == today && booking.Status == OpdBooking.Waiting)
-            .OrderBy(booking => booking.TokenNumber)
+        var next = await OpdBooking.WaitingQueue(db, today)
             .FirstOrDefaultAsync(cancellationToken);
         if (next is not null)
         {
@@ -31,6 +30,7 @@ public sealed class OpdCallAction
             // PostgreSQL stores microseconds. Return the same timestamp on the first call and on replay.
             var utcNow = DateTimeOffset.UtcNow;
             next.CalledAt = utcNow.AddTicks(-(utcNow.Ticks % 10));
+            OpdNotification.EnqueueCall(db, next);
         }
 
         db.OpdCallActions.Add(new OpdCallAction { StaffId = staffId, IdempotencyKey = key, Booking = next });
