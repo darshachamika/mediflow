@@ -98,6 +98,9 @@ try {
   await reception.getByText(`Token ${online.tokenNumber} checked in.`, { exact: true }).waitFor();
   await patient.bringToFront();
   await tokenStatus(patient, online.tokenNumber, "Waiting");
+  await queueRows(patient).filter({ hasText: new RegExp(`^Token ${online.tokenNumber} for `) })
+    .getByText(/Approximate wait \d+ min/).waitFor();
+  await capture(patient, "patient-wait-estimate", { fullPage: true });
   await online.qr.waitFor({ state: "hidden" });
 
   const walkInResponse = reception.waitForResponse((response) =>
@@ -162,6 +165,8 @@ try {
   await patient.getByText("You have no OPD tokens for this date.", { exact: true }).waitFor();
   await patient.getByRole("button", { name: "Today", exact: true }).click();
   await tokenStatus(patient, online.tokenNumber, "Completed");
+  assert.equal(await queueRows(patient).filter({ hasText: new RegExp(`^Token ${online.tokenNumber} for `) })
+    .getByText(/Approximate wait/).count(), 0);
   assert.equal(await queueRows(patient).filter({ hasText: new RegExp(`^Token ${walkIn} for `) }).count(), 0);
   const manual = await book(patient);
   await reception.getByLabel("Token number", { exact: true }).fill(String(manual.tokenNumber));
@@ -174,6 +179,40 @@ try {
   await patient.getByRole("button", { name: `Cancel token ${manual.tokenNumber}`, exact: true }).click();
   await tokenStatus(patient, manual.tokenNumber, "Cancelled");
   console.log("PASS browser: populated and empty patient history, Completed on Today, walk-in isolation, manual lookup and check-in");
+
+  const waitingTokens = [];
+  for (let index = 0; index < 3; index++) {
+    const waiting = await book(patient);
+    waitingTokens.push(waiting);
+    await reception.getByLabel("Token number", { exact: true }).fill(String(waiting.tokenNumber));
+    await reception.getByRole("button", { name: "Find token", exact: true }).click();
+    await reception.getByRole("button", { name: "Check in token", exact: true }).click();
+    await reception.getByText(`Token ${waiting.tokenNumber} · Waiting`, { exact: true }).waitFor();
+  }
+  const [earlier, next, later] = waitingTokens;
+  await patient.bringToFront();
+  const laterRow = queueRows(patient).filter({ hasText: new RegExp(`^Token ${later.tokenNumber} for `) });
+  await laterRow.getByText(/Approximate wait \d+ min/).waitFor();
+  await laterRow.filter({ hasText: "2 ahead in queue" }).waitFor();
+  const beforeCancellation = Number((await laterRow.textContent()).match(/Approximate wait (\d+) min/)[1]);
+  await capture(patient, "patient-wait-estimate", { fullPage: true });
+  await patient.getByRole("button", { name: `Cancel token ${earlier.tokenNumber}`, exact: true }).click();
+  await laterRow.filter({ hasText: "1 ahead in queue" }).waitFor();
+  const afterCancellation = Number((await laterRow.textContent()).match(/Approximate wait (\d+) min/)[1]);
+  assert(afterCancellation < beforeCancellation, "Earlier cancellation should reduce the remaining wait");
+  await doctor.getByRole("button", { name: "Call next in room", exact: true }).click();
+  await doctor.getByText(`Token ${next.tokenNumber} · Called`, { exact: true }).waitFor();
+  await patient.bringToFront();
+  await laterRow.filter({ hasText: "Next in queue" }).waitFor({ timeout });
+  await tokenStatus(patient, next.tokenNumber, "Called");
+  assert.equal(await queueRows(patient).filter({ hasText: new RegExp(`^Token ${next.tokenNumber} for `) })
+    .getByText(/Approximate wait/).count(), 0);
+  await doctor.getByRole("button", { name: "Start consultation", exact: true }).click();
+  await doctor.getByRole("button", { name: "Complete consultation", exact: true }).click();
+  await doctor.getByText(`Completed consultation for token ${next.tokenNumber}.`, { exact: true }).waitFor();
+  await patient.getByRole("button", { name: `Cancel token ${later.tokenNumber}`, exact: true }).click();
+  await tokenStatus(patient, later.tokenNumber, "Cancelled");
+  console.log("PASS browser: Waiting estimates refresh after an earlier cancellation and call, and disappear outside Waiting");
 
   const scan = await book(patient);
   const scanImage = await scan.qr.getAttribute("src");

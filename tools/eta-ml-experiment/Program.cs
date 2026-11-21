@@ -1,119 +1,131 @@
 using System.Globalization;
+using System.IO.Compression;
+using System.Security.Cryptography;
+using System.Text.Json;
 using MediFlow.Api;
 using Microsoft.ML;
-
-if (args.Length != 0 && (args.Length != 2 || args[0] != "--csv"))
-{
-    Console.Error.WriteLine("Usage: EtaExperiment [--csv dataset.csv]");
-    return 2;
-}
+using Microsoft.ML.Trainers;
 
 try
 {
-    var synthetic = args.Length == 0;
-    var rows = (synthetic ? SyntheticRows() : ReadCsv(args[1]))
-        .Where(row => row.ServingRooms > 0)
-        .OrderBy(row => row.ObservedAt).ToArray();
-    if (rows.Length < 20) throw new InvalidDataException("At least 20 completed visits with serving rooms are required.");
-    var cutoff = rows[(int)(rows.Length * 0.8)].ObservedAt;
-    var train = rows.Where(row => row.ObservedAt < cutoff && row.StartedAt < cutoff).ToArray();
-    var test = rows.Where(row => row.ObservedAt >= cutoff).ToArray();
-    if (train.Length < 10 || test.Length < 4)
-        throw new InvalidDataException("The chronological split must have at least 10 training visits and 4 held-out visits.");
+    if (args.Length == 1 && args[0] == "--self-test") return SelfTest.Run();
+    if (args.Length < 2 || (args[0] != "--synthetic" && args[0] != "--csv"))
+        throw new InvalidDataException("Usage: --synthetic OUTPUT_DIRECTORY | --csv INPUT.csv OUTPUT_DIRECTORY | --self-test");
+    var synthetic = args[0] == "--synthetic";
+    if (args.Length != (synthetic ? 2 : 3)) throw new InvalidDataException("Unexpected arguments.");
+    var output = args[^1];
+    var rows = (synthetic ? SyntheticRows() : ReadCsv(args[1])).OrderBy(row => row.ObservedAt).ToArray();
+    if (rows.Length < 20) throw new InvalidDataException("At least 20 eligible observations are required to evaluate.");
+    var days = rows.Select(row => row.Day).Distinct().Order().ToArray();
+    if (days.Length < 3) throw new InvalidDataException("At least three separate OPD dates are required.");
+    var cutoff = days[Math.Clamp((int)(days.Length * .8), 1, days.Length - 1)];
+    var cutoffUtc = new DateTimeOffset(cutoff.ToDateTime(TimeOnly.MinValue), TimeSpan.FromMinutes(330));
+    var train = rows.Where(row => row.Day < cutoff && row.CalledAt < cutoffUtc).ToArray();
+    var test = rows.Where(row => row.Day >= cutoff).ToArray();
+    if (train.Length < 10 || test.Length < 4) throw new InvalidDataException("Insufficient rows in the chronological partitions.");
 
     var ml = new MLContext(seed: 2026);
     var trainingData = ml.Data.LoadFromEnumerable(train.Select(Features));
-    var pipeline = ml.Transforms.Concatenate("Features", nameof(Observation.Ahead), nameof(Observation.Rooms),
-            nameof(Observation.Busy), nameof(Observation.Duration), nameof(Observation.Fallback), nameof(Observation.Baseline))
+    var pipeline = ml.Transforms.Concatenate("Features", nameof(EtaFeatures.Ahead), nameof(EtaFeatures.Rooms),
+            nameof(EtaFeatures.Busy), nameof(EtaFeatures.Duration), nameof(EtaFeatures.Baseline))
         .Append(ml.Transforms.NormalizeMeanVariance("Features"))
-        .Append(ml.Regression.Trainers.Sdca(labelColumnName: nameof(Observation.Label), maximumNumberOfIterations: 100));
+        .Append(ml.Regression.Trainers.Sdca(new SdcaRegressionTrainer.Options
+        {
+            LabelColumnName = nameof(EtaFeatures.Label), MaximumNumberOfIterations = 200,
+            NumberOfThreads = 1, Shuffle = false
+        }));
     var model = pipeline.Fit(trainingData);
-    var testFeatures = test.Select(Features).ToArray();
-    var predictions = ml.Data.CreateEnumerable<Prediction>(
-        model.Transform(ml.Data.LoadFromEnumerable(testFeatures)), reuseRowObject: false).ToArray();
-
-    var baselineMae = testFeatures.Average(row => Math.Abs(row.Baseline - row.Label));
-    var mlMae = testFeatures.Zip(predictions).Average(pair => Math.Abs(Math.Max(0, pair.Second.Score) - pair.First.Label));
-    if (!double.IsFinite(mlMae)) throw new InvalidDataException("Experiment returned a non-finite error.");
-
-    Console.WriteLine(synthetic ? "Synthetic pipeline demonstration. Results are not clinical validation." : "Supplied dataset. Review representativeness before using a model.");
-    Console.WriteLine($"Chronological cutoff (UTC): {cutoff:O}. Training rows: {train.Length}. Held-out rows: {test.Length}.");
-    Console.WriteLine(FormattableString.Invariant($"Held-out MAE (minutes): C# baseline {baselineMae:F2}, ML.NET {mlMae:F2}."));
-    Console.WriteLine("The live API continues using the C# baseline.");
+    var featureRows = test.Select(Features).ToArray();
+    var scores = ml.Data.CreateEnumerable<EtaScore>(model.Transform(ml.Data.LoadFromEnumerable(featureRows)), false).ToArray();
+    var baseline = Metrics(featureRows.Select(row => (double)row.Baseline - row.Label));
+    // Score the same rounded, bounded estimator that will be used by the API.
+    var candidate = Metrics(featureRows.Zip(scores).Select(pair =>
+        (double.IsFinite(pair.Second.Score) && pair.Second.Score >= 0 && pair.Second.Score <= 1440
+            ? Math.Ceiling(pair.Second.Score) : pair.First.Baseline) - pair.First.Label));
+    var trainPartition = Partition(train);
+    var testPartition = Partition(test);
+    var accepted = scores.All(score => float.IsFinite(score.Score) && score.Score >= 0 && score.Score <= 1440)
+        && EtaModelMetadata.MeetsCriteria(trainPartition, testPartition, baseline, candidate);
+    Directory.CreateDirectory(output);
+    var modelPath = Path.Combine(output, "model.zip");
+    ml.Model.Save(model, trainingData.Schema, modelPath);
+    using (var archive = ZipFile.Open(modelPath, ZipArchiveMode.Update))
+        foreach (var entry in archive.Entries)
+            entry.LastWriteTime = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+    var inputFingerprint = JsonSerializer.Serialize(rows);
+    var version = "eta-v1-" + Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(inputFingerprint)))[..16];
+    var metadata = new EtaModelMetadata(version, EtaModelMetadata.CurrentSchema, synthetic ? "Synthetic" : "Operational",
+        Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(modelPath))), trainPartition, testPartition,
+        baseline, candidate, accepted);
+    var json = JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true });
+    File.WriteAllText(Path.Combine(output, "metadata.json"), json);
+    Console.WriteLine(json);
+    Console.WriteLine(synthetic ? "Synthetic demonstration only. Operational activation is blocked." : "Review provenance and representativeness before explicit activation.");
     return 0;
 }
-catch (Exception error) when (error is IOException or InvalidDataException or FormatException or OverflowException)
+catch (Exception error) when (error is IOException or InvalidDataException or FormatException or OverflowException or ArgumentException)
 {
     Console.Error.WriteLine(error.Message);
     return 1;
 }
 
-static Observation Features(Visit row) => new()
+static EtaPartition Partition(Visit[] rows) => new(rows.Length, rows.Min(row => row.Day), rows.Max(row => row.Day));
+static EtaMetrics Metrics(IEnumerable<double> differences)
 {
-    Ahead = row.WaitingAhead,
-    Rooms = row.ServingRooms,
-    Busy = row.BusyRooms,
-    Duration = (float)row.ConsultationMinutes,
-    Fallback = row.UsesFallback ? 1 : 0,
-    Baseline = WaitEstimate.Minutes(row.WaitingAhead, row.ServingRooms, row.BusyRooms, row.ConsultationMinutes)!.Value,
-    Label = (float)(row.StartedAt - row.ObservedAt).TotalMinutes
-};
+    var errors = differences.ToArray();
+    return new(errors.Average(Math.Abs), Math.Sqrt(errors.Average(value => value * value)));
+}
+static EtaFeatures Features(Visit row)
+{
+    var features = EtaFeatures.From(row.WaitingAhead, row.ServingRooms, row.BusyRooms, row.ConsultationMinutes);
+    features.Label = (float)(row.CalledAt - row.ObservedAt).TotalMinutes;
+    return features;
+}
 
 static IEnumerable<Visit> SyntheticRows()
 {
     var random = new Random(2026);
-    var start = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
-    for (var index = 0; index < 500; index++)
+    var start = new DateTimeOffset(2026, 1, 1, 8, 0, 0, TimeSpan.FromMinutes(330));
+    for (var day = 0; day < 60; day++)
     {
-        var observed = start.AddMinutes(index * 17);
-        var rooms = random.Next(1, 5);
-        var busy = random.Next(rooms + 1);
-        var ahead = random.Next(14);
-        var duration = random.Next(7, 18);
-        var minutes = Math.Max(0, ((double)ahead + busy) / rooms * duration + random.NextDouble() * 8 - 4);
-        yield return new Visit(observed, observed.AddMinutes(minutes), ahead, rooms, busy, duration, index % 7 == 0);
+        for (var i = 0; i < 20; i++)
+        {
+            var observed = start.AddDays(day).AddMinutes(i * 15);
+            var rooms = random.Next(1, 5);
+            var busy = random.Next(rooms + 1);
+            var ahead = random.Next(2, 14);
+            var duration = random.Next(7, 18);
+            var baseline = WaitEstimate.Minutes(ahead, rooms, busy, duration)!.Value;
+            var minutes = Math.Max(0, baseline * .75 + 2 + random.NextDouble() * 2);
+            yield return new(observed, observed.AddMinutes(minutes), ahead, rooms, busy, duration);
+        }
     }
 }
 
 static IEnumerable<Visit> ReadCsv(string path)
 {
     using var reader = File.OpenText(path);
-    const string header = "observedAt,startedAt,waitingAhead,servingRooms,busyRooms,consultationMinutes,usesFallback";
-    if (reader.ReadLine() != header) throw new InvalidDataException($"Expected the CSV header {header}");
-    var lineNumber = 1;
+    const string header = "observedAt,calledAt,waitingAhead,servingRooms,busyRooms,consultationMinutes";
+    if (reader.ReadLine() != header) throw new InvalidDataException("Unexpected CSV header. Use the current export.sql.");
+    var number = 1;
     while (reader.ReadLine() is { } line)
     {
-        lineNumber++;
+        number++;
         var values = line.Split(',');
-        if (values.Length != 7
+        if (values.Length != 6
             || !DateTimeOffset.TryParse(values[0], CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var observed)
-            || !DateTimeOffset.TryParse(values[1], CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var started)
+            || !DateTimeOffset.TryParse(values[1], CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var called)
             || !int.TryParse(values[2], out var ahead) || !int.TryParse(values[3], out var rooms)
             || !int.TryParse(values[4], out var busy)
             || !double.TryParse(values[5], NumberStyles.Float, CultureInfo.InvariantCulture, out var duration)
-            || !bool.TryParse(values[6], out var fallback)
-            || started < observed || ahead < 0 || rooms < 0 || busy < 0 || busy > rooms
-            || !double.IsFinite(duration) || duration is < 1 or > 180)
-            throw new InvalidDataException($"Invalid dataset row {lineNumber}.");
-        yield return new Visit(observed, started, ahead, rooms, busy, duration, fallback);
+            || called < observed || (called - observed).TotalMinutes > 1440
+            || !EtaFeatures.From(ahead, rooms, busy, duration).Valid)
+            throw new InvalidDataException($"Invalid dataset row {number}.");
+        yield return new(observed, called, ahead, rooms, busy, duration);
     }
 }
-
-internal sealed record Visit(DateTimeOffset ObservedAt, DateTimeOffset StartedAt, int WaitingAhead,
-    int ServingRooms, int BusyRooms, double ConsultationMinutes, bool UsesFallback);
-
-internal sealed class Observation
+internal sealed record Visit(DateTimeOffset ObservedAt, DateTimeOffset CalledAt, int WaitingAhead,
+    int ServingRooms, int BusyRooms, double ConsultationMinutes)
 {
-    public float Ahead { get; init; }
-    public float Rooms { get; init; }
-    public float Busy { get; init; }
-    public float Duration { get; init; }
-    public float Fallback { get; init; }
-    public float Baseline { get; init; }
-    public float Label { get; init; }
-}
-
-internal sealed class Prediction
-{
-    public float Score { get; set; }
+    public DateOnly Day => DateOnly.FromDateTime(ObservedAt.ToOffset(TimeSpan.FromMinutes(330)).DateTime);
 }

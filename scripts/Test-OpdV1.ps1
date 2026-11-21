@@ -1,4 +1,4 @@
-param([switch]$Browser, [switch]$BrowserTest, [switch]$ClinicalBrowserTest, [switch]$Upgrade, [switch]$Vector, [string]$VectorPackage)
+param([switch]$Browser, [switch]$BrowserTest, [switch]$ClinicalBrowserTest, [switch]$Upgrade, [switch]$Vector, [string]$VectorPackage, [switch]$MlTest)
 $ErrorActionPreference = 'Stop'
 if ($VectorPackage) {
     if (!$Vector) { throw '-VectorPackage requires -Vector.' }
@@ -30,7 +30,7 @@ $environmentNames = @('ASPNETCORE_ENVIRONMENT', 'DOTNET_ENVIRONMENT', 'FIREBASE_
     'Firebase__ProjectId', 'GOOGLE_APPLICATION_CREDENTIALS', 'ConnectionStrings__MediFlow', 'Frontend__Origin',
     'NEXT_PUBLIC_FIREBASE_API_KEY', 'NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN', 'NEXT_PUBLIC_FIREBASE_PROJECT_ID',
     'NEXT_PUBLIC_FIREBASE_APP_ID', 'NEXT_PUBLIC_API_URL', 'NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_URL',
-    'OpdFaq__VectorEnabled', 'OpdFaq__ApiKey')
+    'OpdFaq__VectorEnabled', 'OpdFaq__ApiKey', 'OpdEta__ModelDirectory', 'OpdEta__ModelEnabled', 'OpdEta__AllowSyntheticModel')
 $savedEnvironment = @{}
 foreach ($key in $environmentNames) { $savedEnvironment[$key] = [Environment]::GetEnvironmentVariable($key) }
 
@@ -73,6 +73,18 @@ function Read-Response($task, [int]$expected = 200) {
 
 try {
     New-Item -ItemType Directory -Path $scratch -Force | Out-Null
+    $env:OpdEta__ModelEnabled = 'false'
+    $env:OpdEta__AllowSyntheticModel = 'false'
+    if ($MlTest) {
+        $modelDirectory = Join-Path $root 'artifacts/eta/synthetic'
+        dotnet run --project "$root/tools/eta-ml-experiment" -- --synthetic $modelDirectory
+        Assert ($LASTEXITCODE -eq 0) 'Synthetic training failed.'
+        dotnet run --project "$root/tools/eta-ml-experiment" -- --self-test
+        Assert ($LASTEXITCODE -eq 0) 'ML self checks failed.'
+        $env:OpdEta__ModelDirectory = $modelDirectory
+        $env:OpdEta__ModelEnabled = 'true'
+        $env:OpdEta__AllowSyntheticModel = 'true'
+    }
     $firebaseCommand = Get-Command firebase.cmd
     $firebaseJs = Join-Path (Split-Path $firebaseCommand.Source) 'node_modules/firebase-tools/lib/bin/firebase.js'
     Assert (Test-Path -LiteralPath $firebaseJs) 'Install Firebase CLI with npm.cmd install -g firebase-tools.'
@@ -222,8 +234,17 @@ VALUES ((SELECT id FROM app_users WHERE firebase_uid='$($accounts[0].localId)'),
     $etaUrl = "$bookings/$($secondB.id)/eta"
     Read-Response (Send GET $etaUrl $patientA) 404
     Read-Response (Send GET $etaUrl) 401
+    Read-Response (Send GET $etaUrl 'invalid') 401
+    Read-Response (Send GET $etaUrl $staff) 403
     $estimate = (Read-Response (Send GET $etaUrl $patientB)).Body
     Assert ($estimate.available -and $estimate.approximate -and $estimate.waitingAhead -eq $waiting.items[0].waitingAhead -and $estimate.minutes -eq 0) 'ETA disagrees with queue position or two available rooms.'
+    Assert ($estimate.source -eq $(if ($MlTest) { 'Model' } else { 'Baseline' })) 'Unexpected ETA source.'
+    Assert ((!$MlTest -and $null -eq $estimate.modelVersion) -or ($MlTest -and $estimate.modelVersion -like 'eta-v1-*')) 'Model version mismatch.'
+    $parallelEstimates = @(1..8 | ForEach-Object { Send GET $etaUrl $patientB })
+    foreach ($request in $parallelEstimates) {
+        $parallel = (Read-Response $request).Body
+        Assert ($parallel.available -and $parallel.minutes -ge 0 -and $parallel.source -eq $estimate.source) 'Concurrent ETA inference failed.'
+    }
     'UPDATE opd_rooms SET "Active"=false;' | docker exec -i $container psql -U postgres -v ON_ERROR_STOP=1
     $estimate = (Read-Response (Send GET $etaUrl $patientB)).Body
     Assert (!$estimate.available -and $null -eq $estimate.minutes -and $estimate.reason -eq 'NoServingRooms') 'ETA should be unavailable without rooms.'
@@ -479,6 +500,32 @@ VALUES ((SELECT id FROM app_users WHERE firebase_uid='$($accounts[0].localId)'),
     $assistantAppointments = (Read-Response (Send POST $assistant $patientA '' @{ kind = 'appointments'; patientId = 999 })).Body
     Assert (($assistantAppointments.items.id -join ',') -eq ($appointmentsA.id -join ',')) 'Assistant appointment ownership mismatch.'
     "PASS practical FAQ sources, fallback, role checks, personal-data isolation and retrieval mode $expectedRetrieval"
+
+    $exportSql = (Get-Content "$root/tools/eta-ml-experiment/export.sql" -Raw).Trim().TrimEnd(';')
+    $extractionCheck = @"
+BEGIN;
+UPDATE opd_bookings b SET status='Completed', room_id=NULL,
+  called_at=c."JoinedAt"+interval '5 minutes',
+  completed_at=c."JoinedAt"+interval '15 minutes', queue_entered_at=c."JoinedAt"
+FROM opd_check_ins c WHERE c."BookingId"=b.id AND b.id=$($secondB.id);
+CREATE TEMP VIEW eta_training AS $exportSql;
+DO 'BEGIN
+IF NOT EXISTS (SELECT 1 FROM eta_training WHERE "calledAt"-"observedAt"=interval ''5 minutes'')
+THEN RAISE EXCEPTION ''Missing correct first-call label''; END IF;
+END';
+UPDATE opd_bookings SET status='Cancelled' WHERE id=$($secondB.id);
+DO 'BEGIN
+IF EXISTS (SELECT 1 FROM eta_training WHERE "calledAt"-"observedAt"=interval ''5 minutes'')
+THEN RAISE EXCEPTION ''Cancelled label leaked''; END IF;
+END';
+ROLLBACK;
+"@
+    $extractionCheck | docker exec -i $container psql -U postgres -v ON_ERROR_STOP=1 | Out-Null
+    Assert ($LASTEXITCODE -eq 0) 'Training extraction verification failed.'
+    $exportPath = Join-Path $root 'artifacts/eta/fixture/visits.csv'
+    & "$root/scripts/Export-OpdEta.ps1" -Container $container -Database postgres -DatabaseUser postgres -Output $exportPath
+    Assert ((Get-Content $exportPath -First 1) -eq 'observedAt,calledAt,waitingAhead,servingRooms,busyRooms,consultationMinutes') 'Training export must contain only the six anonymous columns.'
+    'PASS first-call training label, cancelled exclusion, anonymous export shape and transaction rollback'
 
     if ($Browser -or $BrowserTest -or $ClinicalBrowserTest) {
         $env:NEXT_PUBLIC_FIREBASE_API_KEY = 'demo-api-key'
