@@ -7,6 +7,7 @@ if ($VectorPackage) {
 
 $root = (Resolve-Path "$PSScriptRoot/..").Path
 $runId = [guid]::NewGuid().ToString('N').Substring(0, 8)
+$buildConfiguration = "Verification-$runId"
 $container = "mediflow-v1-$runId"
 $scratch = Join-Path $root "backend/MediFlow.Api/obj/$container"
 $apiProject = Join-Path $root 'backend/MediFlow.Api'
@@ -30,7 +31,8 @@ $environmentNames = @('ASPNETCORE_ENVIRONMENT', 'DOTNET_ENVIRONMENT', 'FIREBASE_
     'Firebase__ProjectId', 'GOOGLE_APPLICATION_CREDENTIALS', 'ConnectionStrings__MediFlow', 'Frontend__Origin',
     'NEXT_PUBLIC_FIREBASE_API_KEY', 'NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN', 'NEXT_PUBLIC_FIREBASE_PROJECT_ID',
     'NEXT_PUBLIC_FIREBASE_APP_ID', 'NEXT_PUBLIC_API_URL', 'NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_URL',
-    'OpdFaq__VectorEnabled', 'OpdFaq__ApiKey', 'OpdEta__ModelDirectory', 'OpdEta__ModelEnabled', 'OpdEta__AllowSyntheticModel')
+    'OpdFaq__VectorEnabled', 'OpdFaq__ApiKey', 'OpdEta__ModelDirectory', 'OpdEta__ModelEnabled', 'OpdEta__AllowSyntheticModel',
+    'MEDIFLOW_NEXT_DIST_DIR', 'MEDIFLOW_TSCONFIG')
 $savedEnvironment = @{}
 foreach ($key in $environmentNames) { $savedEnvironment[$key] = [Environment]::GetEnvironmentVariable($key) }
 
@@ -123,16 +125,16 @@ try {
     $env:OpdFaq__VectorEnabled = $Vector.IsPresent.ToString()
     $env:OpdFaq__ApiKey = ' '
 
-    dotnet build $apiProject -c Verification --nologo
+    dotnet build $apiProject -c $buildConfiguration --nologo
     Assert ($LASTEXITCODE -eq 0) 'API build failed.'
     if ($Upgrade) {
-        dotnet ef database update OpdTokenCompletion --no-build --configuration Verification --project $apiProject
+        dotnet ef database update OpdTokenCompletion --no-build --configuration $buildConfiguration --project $apiProject
         Assert ($LASTEXITCODE -eq 0) 'Baseline migration failed.'
         "INSERT INTO app_users(firebase_uid,role) VALUES ('legacy-fixture','Patient'); INSERT INTO opd_bookings(patient_id,idempotency_key,opd_date,token_number) VALUES (1,'legacy',(now() AT TIME ZONE 'Asia/Colombo')::date-10,12);" |
             docker exec -i $container psql -U postgres -v ON_ERROR_STOP=1
         Assert ($LASTEXITCODE -eq 0) 'Baseline seeding failed.'
     }
-    dotnet ef database update --no-build --configuration Verification --project $apiProject
+    dotnet ef database update --no-build --configuration $buildConfiguration --project $apiProject
     Assert ($LASTEXITCODE -eq 0) 'Fresh database migration failed.'
     if ($Vector) {
         Get-Content "$root/scripts/Enable-OpdFaqVector.sql" -Raw | docker exec -i $container psql -U postgres -v ON_ERROR_STOP=1
@@ -163,7 +165,7 @@ VALUES ((SELECT id FROM app_users WHERE firebase_uid='$($accounts[0].localId)'),
 "@ | docker exec -i $container psql -U postgres -v ON_ERROR_STOP=1
     Assert ($LASTEXITCODE -eq 0) 'Test data setup failed.'
 
-    $api = Start-Process dotnet -ArgumentList 'bin/Verification/net10.0/MediFlow.Api.dll','--urls',$apiUrl `
+    $api = Start-Process dotnet -ArgumentList "bin/$buildConfiguration/net10.0/MediFlow.Api.dll",'--urls',$apiUrl `
         -WorkingDirectory $apiProject -WindowStyle Hidden -PassThru -RedirectStandardOutput "$scratch/api.out" -RedirectStandardError "$scratch/api.err"
     Wait-Http "$apiUrl/health" $api
     $client = [System.Net.Http.HttpClient]::new()
@@ -535,6 +537,9 @@ ROLLBACK;
         $env:NEXT_PUBLIC_API_URL = $apiUrl
         $env:NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_URL = $authUrl
         $frontendDir = Join-Path $root 'frontend'
+        $env:MEDIFLOW_NEXT_DIST_DIR = ".next-fixtures/$runId"
+        $env:MEDIFLOW_TSCONFIG = ".tsconfig-fixture-$runId.json"
+        Copy-Item "$frontendDir/tsconfig.json" "$frontendDir/$env:MEDIFLOW_TSCONFIG"
         npm.cmd --prefix $frontendDir run build
         Assert ($LASTEXITCODE -eq 0) 'Browser fixture frontend build failed.'
         $frontend = Start-Process node -ArgumentList 'node_modules/next/dist/bin/next','start','--port',$frontendPort `

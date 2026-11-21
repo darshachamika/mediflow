@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
 import { capture, checkMobile } from "./suwadora-capture.mjs";
+import { verifyStaffQueue } from "./staff-release.mjs";
 
 const [origin, apiUrl, password] = process.argv.slice(2);
 assert(origin && apiUrl && password, "Run this test through Test-OpdV1.ps1 -ClinicalBrowserTest.");
@@ -114,6 +115,7 @@ try {
   await task.getByLabel("Lab result").fill(result);
   await task.getByRole("button", { name: "Save lab result", exact: true }).click();
   await task.getByText(result, { exact: true }).waitFor();
+  await capture(lab, "lab-staff-worklist");
   const enteredOnly = await refreshPatient(patient);
   assert(!enteredOnly.records[1].some((item) => item.test === testName), "An entered, unverified result must stay private.");
   assert.equal(await (await openPatientLab(patient)).getByText(result, { exact: true }).count(), 0);
@@ -239,6 +241,8 @@ try {
   await administration.getByText("New department", { exact: true }).click();
   console.log("PASS supporting browser: OpdAdmin sees queue counts and rooms, and can add a department");
   await capture(admin, "09-opd-administration");
+  const staff = await signIn("staff@example.test");
+  await verifyStaffQueue(staff, apiUrl);
 } finally {
   await browser.close();
 }

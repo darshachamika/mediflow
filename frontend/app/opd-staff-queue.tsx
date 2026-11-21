@@ -172,7 +172,7 @@ export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) 
     && (searchedToken === "" || String(item.tokenNumber) === searchedToken));
 
   return (
-    <section aria-labelledby="staff-queue">
+    <section className="suwa-panel suwa-staff-queue" aria-labelledby="staff-queue">
       <h2 id="staff-queue">{viewingToday ? "Today’s OPD queue" : `OPD queue for ${historyDate}`}</h2>
       <OpdDatePicker date={selectedDate} today={today} disabled={actionPending} onSelect={selectDate} />
       {viewingToday && <button type="button" disabled={actionPending || loading} onClick={callNext}>Call next</button>}
@@ -193,13 +193,11 @@ export function OpdStaffQueue({ user, apiUrl }: { user: User; apiUrl: string }) 
               </div>
             ))}
           </dl>
-          <label>
-            Status{" "}
-            <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}>
-              <option>All</option>
-              {Object.keys(counts).map((status) => <option key={status}>{status}</option>)}
-            </select>
-          </label>
+          <label htmlFor="staff-status-filter">Status</label>
+          <select id="staff-status-filter" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}>
+            <option>All</option>
+            {Object.keys(counts).map((status) => <option key={status}>{status}</option>)}
+          </select>
           <label>
             Token number{" "}
             <input type="search" inputMode="numeric" value={tokenSearch}

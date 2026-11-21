@@ -85,7 +85,7 @@ Apply the latest migration, then sign in as a provisioned Patient and select **B
 
 ### Browser OPD workflow
 
-Patients book from the home page and receive a check-in QR for today's Booked token. They can regenerate it from the token list or give reception their token number. Reception can upload a QR image, use a scanner that types its decoded payload into the **Check-in QR code** field, or look up the token number and check it in manually. **Issue walk-in token** creates a printable ticket with its token number and date.
+Patients book from the home page and receive a check-in QR for today's Booked token. They can regenerate it from the token list or give reception their token number. Reception can select **Start camera**, allow camera permission, and scan a fresh QR. A successful read stops the camera and populates the code for **Check in by QR** confirmation. Image upload, a scanner that types a payload, and manual token lookup are also supported. Camera access needs HTTPS or localhost. **Issue walk-in token** creates a printable ticket with its token number and date.
 
 Doctors see their assigned room for today's Colombo date after sign-in. Use **Call next in room**, **Start consultation**, and **Complete consultation** in order. The legacy OpdStaff queue remains available for unassigned calls. The public display at `/display` needs no sign-in. It uses SignalR and gets a fresh snapshot after reconnecting. The Patient date picker shows the completed token in booking history.
 
@@ -148,7 +148,7 @@ For a manual walkthrough, run `pwsh -NoProfile -File scripts/Test-OpdV1.ps1 -Bro
 2. As `doctor-a@example.test`, call the token, start the consultation, and select **Open consultation**. Save private notes and a patient-facing summary. Request a synthetic lab test.
 3. As `lab@example.test`, refresh the worklist, enter a synthetic result, and verify it. Confirm that the result is still absent from the patient's **My Visits**.
 4. As the doctor, complete the consultation and publish the summary. Select **Refresh visit** before publishing the verified result. Schedule a follow-up using a future Sri Lanka date and time.
-5. Refresh **My Visits** as Patient A and confirm the summary, lab result, and upcoming appointment are visible. Sign in as `patient-b@example.test` and confirm Patient A's records are absent. The existing OPD date picker remains available above My Visits.
+5. Refresh **My Visits** as Patient A and confirm the published summary is visible. Select **Lab results** to open the published result and **Appointments** for the follow-up. Sign in as `patient-b@example.test` and confirm Patient A's records are absent. The OPD date picker remains under **My OPD visit**.
 
 ### Operations and notifications
 
@@ -313,3 +313,67 @@ foreach ($number in @([int](Read-Host 'Lower token number'), [int](Read-Host 'Hi
 Cancel the higher Waiting token in the Patient view. Open a separate browser session as `staff@example.test`. Select **Call next**, then **Complete** for the lower token. Confirm the Patient view shows both changes after polling.
 3. In the staff view, select the populated date and verify token order, then select the empty date and verify four zero counts. Return to **Today** and verify the live queue. Sign in separately as `patient-b@example.test` and verify only that patient's history is visible.
 4. Press Enter in the fixture terminal to clean up. Rebuild the frontend with its normal Firebase configuration before starting a production build from the same directory.
+
+## v1 handover
+
+The supported v1 scope covers Firebase/profile authorization, patient booking and cancellation, reception check-in and walk-ins, shared queues, assigned-room consultations, publication-controlled clinical records, follow-ups, operations, notifications, sourced FAQ, history, public SignalR display and guarded waiting-time ML. The API enforces role and ownership boundaries. Daily token allocation and state transitions use PostgreSQL transactions and constraints.
+
+### Accounts and provisioning
+
+The disposable browser fixture creates the following synthetic accounts. All use password `mediflow-emulator-only`. Use separate browser profiles or Incognito windows for different roles.
+
+| Account | Role |
+| --- | --- |
+| patient-a@example.test, patient-b@example.test | Patient |
+| reception@example.test | Reception |
+| doctor-a@example.test, doctor-b@example.test | Doctor |
+| staff@example.test | OpdStaff |
+| lab@example.test | LabStaff |
+| admin@example.test | OpdAdmin |
+
+For your own Firebase project, create separate Email/Password accounts and provision their actual Firebase UIDs in PostgreSQL. Use the following template once per account, substituting its UID and one role from the table. Doctor room assignments use the resulting numeric app-user ID and today's Asia/Colombo date. Provision an OpdAdmin account first, then use its Administration screen to create rooms and assignments.
+
+```sql
+INSERT INTO app_users (firebase_uid, role)
+VALUES ('replace-with-firebase-uid', 'Doctor')
+ON CONFLICT (firebase_uid) DO NOTHING;
+SELECT id, role FROM app_users WHERE firebase_uid = 'replace-with-firebase-uid';
+```
+
+### Verified setup and review
+
+Install .NET 10 SDK, Node.js 20.9+, PowerShell 7, Docker Desktop, and Google Chrome. Start Docker Desktop before running these commands. The fixture sets up its own PostgreSQL database, applies migrations, starts Firebase Auth Emulator, and provisions synthetic accounts. Live Firebase credentials are unnecessary for the fixture.
+
+```powershell
+Set-Location D:\Mad\mediflow
+npm.cmd --prefix frontend ci
+npm.cmd install --global firebase-tools
+# Install once if dotnet-ef is missing
+dotnet tool install --global dotnet-ef --version 10.0.8
+dotnet build backend/MediFlow.Api
+pwsh -NoProfile -File scripts/Test-OpdV1.ps1 -MlTest
+pwsh -NoProfile -File scripts/Test-OpdV1.ps1 -BrowserTest -ClinicalBrowserTest
+pwsh -NoProfile -File scripts/Test-OpdV1.ps1 -Upgrade
+git diff --check
+# Start a baseline demo, then open http://localhost:3097
+pwsh -NoProfile -File scripts/Test-OpdV1.ps1 -Browser
+```
+
+The browser fixture runs the Next.js production build with isolated fixture output and a copied TypeScript configuration. Every API fixture also uses a unique build configuration. This allows verification beside an existing preview without overwriting its binaries or assets. Generated files remain ignored. Automated fixtures use free frontend ports. The interactive fixture uses port 3097, which must be free. It prints its API and Auth Emulator URLs and test dates. Press Enter in its terminal to stop its processes and disposable container. Stop the normal development database with `docker compose down` to retain bookings. Use Ctrl+C to stop normal frontend/API terminals.
+
+### Manual hardware acceptance
+
+1. On the reception device, use localhost or an HTTPS address. As Patient A, generate a fresh QR. As Reception, select Start camera, allow access and scan it from the patient's screen. Check that the video stops and the code fills before staff confirmation. Confirm once and check that the patient becomes Waiting.
+2. Deny permission and verify the upload/manual alternatives. Try a damaged image. Generate a replacement QR and verify the earlier code is rejected. Test an unused QR after its 15-minute expiry. Stop the scanner, switch tabs, navigate away and sign out, confirming the device camera indicator switches off each time.
+3. Issue a walk-in token, select Print token and check the actual paper output contains the correct number/date and excludes the surrounding workstation UI. Automated tests cover QR image decoding, a simulated video stream, print invocation and print CSS. Physical camera and printer acceptance remains pending.
+
+### Release limits and deployment preparation
+
+- The UI uses the supplied reference compositions with recreated artwork and synthetic records in captures. Decorative borders and exact data-dependent spacing differ from the mockups. Language switching, settings, Remember me, password reset and patient self-booking of follow-ups are omitted because these controls have no implemented flows.
+- SMS delivery is simulated. A real provider, consent/contact-data design and delivery monitoring are required before sending messages externally.
+- FAQ defaults to deterministic sourced demo guides. A configured HTTP provider must support both embeddings and chat completions. A locally stored Gemini key alone does not verify provider/model compatibility. Validate that integration separately with general service questions and no patient information.
+- Operational ML remains disabled until representative real observations satisfy the documented activation gates and operational review. Synthetic results validate the pipeline only. The baseline cap can underestimate longer waits.
+- Before a real patient deployment, configure production Firebase and HTTPS hosting, secret storage, database backups and a tested restore procedure, monitoring, access review, and retention/audit requirements appropriate to the deployment. This repository has no verified production deployment or backup/restore automation. Arrange a clinical/privacy review for real records.
+- If NuGet reports NU1900, compilation may still pass while the vulnerability feed is unavailable. Complete dependency vulnerability review from an environment with registry access before deployment.
+
+The development database audit found 19 bookings and no captured ETA sample table. It was inspected read-only and retained. Apply existing migrations deliberately when upgrading that database. Schema upgrades are tested using a disposable legacy database.

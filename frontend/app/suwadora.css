@@ -176,6 +176,12 @@ body { margin: 0; }
 .suwa-counts li { text-align: center; font-weight: 700; background: var(--paper); padding: .8rem .4rem; border: 1px solid var(--border); border-radius: .65rem; }
 .suwa-counts li:nth-child(2) { background: #fce5af; border-color: var(--gold); }
 .suwa-counts strong { display: block; font-size: clamp(1.65rem, 3.2vw, 3rem); color: var(--maroon); }
+.suwa-staff-queue dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr)); gap: .6rem; }
+.suwa-staff-queue dl > div { padding: .7rem; background: var(--wash); border: 1px solid var(--border); border-radius: .55rem; }
+.suwa-staff-queue dd { font-size: 1.8rem; font-weight: 750; margin: 0; color: var(--maroon); }
+.suwa-staff-queue table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+.suwa-staff-queue th, .suwa-staff-queue td { text-align: left; padding: .65rem .35rem; border-bottom: 1px solid var(--border); }
+.suwa-staff-queue th { background: var(--gold-light); }
 .suwa-admin-grid :is(ul, ol) { padding: 0; list-style: none; }
 .suwa-admin-grid li { padding: .45rem .55rem; border: 1px solid var(--border); border-radius: .45rem; margin-bottom: .25rem; }
 .suwa-admin-grid details, .suwa-all-counts { margin: .75rem 0; }
