@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
+import { capture, checkMobile } from "./suwadora-capture.mjs";
 
 const [origin, apiUrl, password, populatedDate, emptyDate] = process.argv.slice(2);
 assert(origin && apiUrl && password && populatedDate && emptyDate, "Run this test through Test-OpdV1.ps1 -BrowserTest.");
@@ -7,9 +8,14 @@ const browser = await chromium.launch({ channel: "chrome" });
 const timeout = 20_000;
 
 async function signIn(email) {
-  const context = await browser.newContext();
+  const context = await browser.newContext({ viewport: { width: 1440, height: 960 } });
   const page = await context.newPage();
   await page.goto(origin);
+  if (email === "patient-a@example.test") {
+    await page.getByRole("heading", { name: "Sign in", exact: true }).waitFor();
+    await capture(page, "05-sign-in");
+    await checkMobile(page, "patient", [[null, "Sign in", "sign-in"]]);
+  }
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill(password);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
@@ -56,7 +62,7 @@ try {
   const reception = await signIn("reception@example.test");
   const doctor = await signIn("doctor-a@example.test");
   await doctor.getByRole("heading", { name: "Room A" }).waitFor();
-  const display = await (await browser.newContext()).newPage();
+  const display = await (await browser.newContext({ viewport: { width: 1920, height: 1080 } })).newPage();
   let displaySocket;
   let blockReconnect = false;
   const publicEvents = [];
@@ -80,6 +86,8 @@ try {
   await display.getByText("No tokens are currently called.", { exact: true }).waitFor();
 
   const online = await book(patient);
+  await capture(patient, "01-patient-portal");
+  await checkMobile(patient, "patient", [[null, "My OPD visit", "portal"]]);
   const image = await online.qr.getAttribute("src");
   assert.match(image, /^data:image\/png;base64,/);
   await reception.getByLabel("Upload QR image").setInputFiles({
@@ -99,6 +107,10 @@ try {
   assert.equal(walkIn, online.tokenNumber + 1);
   const ticket = reception.getByRole("region", { name: "Walk-in ticket" });
   await ticket.getByText(`Token ${walkIn}`, { exact: true }).waitFor();
+  const shared = reception.getByRole("region", { name: "Shared queue", exact: true });
+  await shared.getByText("Walk-in", { exact: false }).waitFor();
+  await shared.getByText("Online", { exact: false }).first().waitFor();
+  await capture(reception, "02-reception-desk");
   await reception.evaluate(() => { window.print = () => { document.body.dataset.printRequested = "yes"; }; });
   await reception.getByRole("button", { name: "Print token" }).click();
   assert.equal(await reception.locator("body").getAttribute("data-print-requested"), "yes");
@@ -112,6 +124,8 @@ try {
   await doctor.getByRole("button", { name: "Call next in room" }).click();
   await doctor.getByText(`Token ${online.tokenNumber} · Called`, { exact: true }).waitFor();
   await displayRow(display, online.tokenNumber).getByRole("cell", { name: "Room A" }).waitFor();
+  assert(await display.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await capture(display, "04-waiting-hall-1920x1080");
   assert(publicEvents.some((items) => items.some((item) => item.tokenNumber === online.tokenNumber)));
   for (const event of publicEvents) assertPublic(event);
   assert.deepEqual(await display.getByRole("columnheader").allTextContents(), ["Token number", "Room"]);
@@ -160,6 +174,69 @@ try {
   await patient.getByRole("button", { name: `Cancel token ${manual.tokenNumber}`, exact: true }).click();
   await tokenStatus(patient, manual.tokenNumber, "Cancelled");
   console.log("PASS browser: populated and empty patient history, Completed on Today, walk-in isolation, manual lookup and check-in");
+
+  const scan = await book(patient);
+  const scanImage = await scan.qr.getAttribute("src");
+  await reception.bringToFront();
+  await reception.evaluate(async (src) => {
+    const image = new Image();
+    image.src = src;
+    await image.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = 640;
+    canvas.height = 480;
+    const context = canvas.getContext("2d");
+    context.imageSmoothingEnabled = false;
+    const frames = { denied: true, stream: null, constraints: null, showCode: false };
+    window.fixtureCamera = frames;
+    navigator.mediaDevices.getUserMedia = async (constraints) => {
+      if (frames.denied) throw new DOMException("Consent declined", "NotAllowedError");
+      frames.constraints = constraints;
+      const stream = canvas.captureStream(15);
+      frames.stream = stream;
+      const timer = setInterval(() => {
+        if (!stream.active) return clearInterval(timer);
+        context.fillStyle = "white";
+        context.fillRect(0, 0, 640, 480);
+        if (frames.showCode) context.drawImage(image, 140, 60, 360, 360);
+      }, 65);
+      return stream;
+    };
+  }, scanImage);
+  const startCamera = reception.getByRole("button", { name: "Start camera", exact: true });
+  const confirm = reception.getByRole("button", { name: "Check in by QR", exact: true });
+  await startCamera.click();
+  await reception.getByText(/Camera permission denied/).waitFor();
+  assert(await confirm.isDisabled());
+
+  await reception.evaluate(() => { window.fixtureCamera.denied = false; });
+  await startCamera.click();
+  await reception.getByText(/Center the patient's QR code/).waitFor();
+  await reception.getByText(/No readable SuwaDora check-in QR yet/).waitFor({ timeout: 15_000 });
+  assert(await confirm.isDisabled());
+  await reception.getByRole("navigation", { name: "Reception desk" }).getByRole("link", { name: "Find token" }).click();
+  assert(await reception.evaluate(() => !window.fixtureCamera.stream.active));
+
+  let checkIns = 0;
+  const scanEndpoint = `${apiUrl}/api/opd/reception/check-in`;
+  reception.on("request", (request) => {
+    if (request.method() === "POST" && request.url() === scanEndpoint) checkIns++;
+  });
+  await startCamera.click();
+  await reception.getByText(/Center the patient's QR code/).waitFor();
+  await reception.evaluate(() => { window.fixtureCamera.showCode = true; });
+  await reception.getByText("QR read. Select Check in by QR to confirm.", { exact: true }).waitFor();
+  assert.equal(checkIns, 0, "A camera read must wait for staff confirmation");
+  assert(await reception.evaluate(() => !window.fixtureCamera.stream.active));
+  assert.equal(await reception.evaluate(() => window.fixtureCamera.constraints.video.facingMode.ideal), "environment");
+  await confirm.click();
+  await reception.getByText(`Token ${scan.tokenNumber} checked in.`, { exact: true }).waitFor();
+  assert.equal(checkIns, 1);
+  await patient.bringToFront();
+  await tokenStatus(patient, scan.tokenNumber, "Waiting");
+  await patient.getByRole("button", { name: `Cancel token ${scan.tokenNumber}`, exact: true }).click();
+  await tokenStatus(patient, scan.tokenNumber, "Cancelled");
+  console.log("PASS browser: simulated live camera, permission denial, unreadable frames, cleanup, explicit confirmation and fresh QR check-in");
 } finally {
   await browser.close();
 }

@@ -161,6 +161,27 @@ bookings.MapPost("/{bookingId:long}/cancel", async (
 
 var queue = api.MapGroup("/opd/queue").RequireAuthorization("OpdStaff");
 
+api.MapGet("/opd/workspace-queue", async (ClaimsPrincipal user, MediFlowDbContext db, CancellationToken ct) =>
+{
+    var today = OpdBooking.Today();
+    var isDoctor = user.IsInRole("Doctor");
+    if (isDoctor)
+    {
+        var actor = ReceptionEndpoints.UserId(user);
+        if (!await db.Set<OpdAssignment>().AnyAsync(item => item.DoctorId == actor && item.OpdDate == today && item.Room.Active, ct))
+            return Results.Forbid();
+    }
+
+    var rows = isDoctor ? OpdBooking.WaitingQueue(db, today) : db.OpdBookings
+        .Where(item => item.OpdDate == today && (item.Status == OpdBooking.Booked || item.Status == OpdBooking.Waiting
+            || item.Status == OpdBooking.Called || item.Status == OpdBooking.InConsultation))
+        .OrderBy(item => item.QueueEnteredAt).ThenBy(item => item.TokenNumber);
+
+    return Results.Ok(await rows.AsNoTracking()
+        .Select(item => new { item.TokenNumber, item.Status, channel = item.IssuedById == null ? "Online" : "Walk-in" })
+        .ToListAsync(ct));
+}).RequireAuthorization(policy => policy.RequireRole("Reception", "Doctor"));
+
 queue.MapGet("", async (
     HttpRequest request, HttpResponse response,
     MediFlowDbContext db, CancellationToken cancellationToken) =>

@@ -20,7 +20,8 @@ export function DoctorClinical({ user, apiUrl, revision, selectedId, select }: C
   const selected = visits.data?.find((visit) => visit.id === selectedId);
 
   return (
-    <section aria-labelledby="clinical-heading">
+    <section className="suwa-clinical" aria-labelledby="clinical-heading">
+      <div className="suwa-clinical-toolbar">
       <h2 id="clinical-heading">Clinical visits</h2>
       <button type="button" onClick={visits.refresh} disabled={visits.loading}>Refresh visits</button>
       {visits.loading && <p role="status">Loading clinical visits…</p>}
@@ -38,6 +39,7 @@ export function DoctorClinical({ user, apiUrl, revision, selectedId, select }: C
           </select>
         </label></p>
       )}
+      </div>
       {selected && <VisitChart key={selected.id} visit={selected} user={user} apiUrl={apiUrl} />}
     </section>
   );
@@ -87,14 +89,18 @@ function VisitChart({ visit, user, apiUrl }: ClinicalProps & { visit: Visit }) {
   }
 
   return (
-    <section aria-labelledby="visit-chart-heading">
+    <section className="suwa-chart" aria-labelledby="visit-chart-heading">
+      <header className="suwa-clinical-toolbar">
       <h3 id="visit-chart-heading">Visit for token {visit.tokenNumber}</h3>
       <button type="button" onClick={details.refresh} disabled={details.loading || busy}>Refresh visit</button>
+      </header>
       {details.loading && <p role="status">Loading visit record…</p>}
       {details.error && <p role="alert">{details.error}</p>}
       {details.data && (
         <>
           <VisitNoteEditor visit={visit} user={user} apiUrl={apiUrl} initialNote={details.data.note} />
+          <div className="suwa-grid suwa-chart-panels">
+          <section className="suwa-card">
           <h4>Lab requests</h4>
           <form onSubmit={requestLab}>
             <label>Test name <input value={test} onChange={(event) => setTest(event.target.value)} maxLength={160} required /></label>{" "}
@@ -114,7 +120,10 @@ function VisitChart({ visit, user, apiUrl }: ClinicalProps & { visit: Visit }) {
           ))}</ul>}
           {message && <p role="status">{message}</p>}
           {error && <p role="alert">{error}</p>}
-          {visit.status === "Completed" && visit.hasPatient && <FollowUp visitId={visit.id} user={user} apiUrl={apiUrl} />}
+          </section>
+          {visit.hasPatient && (visit.status === "Completed" ? <FollowUp visitId={visit.id} user={user} apiUrl={apiUrl} />
+            : <section className="suwa-card"><h4>Follow-up appointment</h4><p>Complete the consultation before scheduling a follow-up.</p></section>)}
+          </div>
         </>
       )}
     </section>
@@ -162,18 +171,20 @@ function VisitNoteEditor({ visit, user, apiUrl, initialNote }: ClinicalProps & {
   }
 
   return (
-    <>
+    <section className="suwa-card suwa-editor">
       <h4>Visit notes and summary</h4>
-      <form onSubmit={(event) => {
+      <form className="suwa-note-form" onSubmit={(event) => {
         event.preventDefault();
         void update(false);
       }}>
-        <p><label>Private visit notes<br />
+        <div className="suwa-grid suwa-notes">
+        <p><label>Private visit notes
           <textarea rows={5} maxLength={16000} value={notes} onChange={(event) => setNotes(event.target.value)} required disabled={busy || !!published} />
         </label></p>
-        <p><label>Patient-facing summary<br />
-          <textarea rows={4} maxLength={8000} value={summary} onChange={(event) => setSummary(event.target.value)} disabled={busy || !!published} />
+        <p><label>Patient-facing summary
+          <textarea rows={5} maxLength={8000} value={summary} onChange={(event) => setSummary(event.target.value)} disabled={busy || !!published} />
         </label></p>
+        </div>
         {published ? <p>Published <time dateTime={published}>{opdDateTime.format(new Date(published))}</time></p> : (
           <>
             <button disabled={busy || !dirty}>Save visit draft</button>{" "}
@@ -185,7 +196,7 @@ function VisitNoteEditor({ visit, user, apiUrl, initialNote }: ClinicalProps & {
       </form>
       {message && <p role="status">{message}</p>}
       {error && <p role="alert">{error}</p>}
-    </>
+    </section>
   );
 }
 
@@ -222,7 +233,7 @@ function FollowUp({ visitId, user, apiUrl }: ClinicalProps & { visitId: number }
   }
 
   return (
-    <>
+    <section className="suwa-card">
       <h4>Follow-up appointment</h4>
       <form onSubmit={schedule}>
         <p><label>Sri Lanka appointment date and time <input type="datetime-local" value={localTime} onChange={(event) => setLocalTime(event.target.value)} required /></label></p>
@@ -231,6 +242,6 @@ function FollowUp({ visitId, user, apiUrl }: ClinicalProps & { visitId: number }
       </form>
       {booked && <p role="status">Follow-up scheduled for <time dateTime={booked}>{opdDateTime.format(new Date(booked))}</time>.</p>}
       {error && <p role="alert">{error}</p>}
-    </>
+    </section>
   );
 }

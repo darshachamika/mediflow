@@ -1,0 +1,251 @@
+:root {
+  --maroon: #641c36;
+  --deep: #460a21;
+  --gold: #d6a542;
+  --gold-light: #f6d78e;
+  --ivory: #faf5e9;
+  --ink: #2b1421;
+  --border: #c9b7a3;
+  --paper: #fffaf1;
+  --wash: #f3eadb;
+  --edge: clamp(1rem, 3.2vw, 3.6rem);
+}
+body { margin: 0; }
+.suwa-shell, .suwa-board {
+  min-height: 100vh;
+  color: var(--ink);
+  background: var(--ivory);
+  font: 1rem/1.45 "Instrument Sans", "Segoe UI", system-ui, sans-serif;
+}
+.suwa-shell *, .suwa-board * { box-sizing: border-box; }
+.suwa-shell [hidden] { display: none !important; }
+.suwa-shell :is(h1, h2, h3, h4), .suwa-board h1 { color: var(--deep); line-height: 1.1; margin: 0 0 .6rem; letter-spacing: -.025em; }
+.suwa-shell h1 { font-size: clamp(2rem, 3vw, 3.25rem); }
+.suwa-shell h2 { font-size: clamp(1.35rem, 2vw, 2rem); }
+.suwa-shell h3 { font-size: 1.22rem; }
+.suwa-shell p { margin: .4rem 0 .85rem; }
+.suwa-header {
+  display: flex; align-items: center; flex-wrap: wrap; gap: clamp(.7rem, 2vw, 2rem);
+  min-height: 5.9rem; padding: .8rem var(--edge);
+  background: linear-gradient(110deg, #541127, var(--maroon) 55%, #681630);
+  color: var(--ivory); border-bottom: 3px solid var(--gold);
+}
+.suwa-brand { display: flex; gap: .85rem; align-items: center; flex: none; }
+.suwa-brand img { width: 4rem; height: auto; mix-blend-mode: lighten; }
+.suwa-brand strong { font-size: clamp(1.65rem, 3vw, 2.8rem); display: block; line-height: 1; letter-spacing: -.035em; }
+.suwa-brand p { color: #ffda72; margin: .22rem 0 0; font-size: clamp(.9rem, 1.3vw, 1.18rem); }
+.suwa-context { text-transform: uppercase; letter-spacing: .16em; font-size: .9rem; font-weight: 700; padding-left: 1.45rem; border-left: 1px solid var(--gold); }
+.suwa-header-actions { display: grid; justify-items: end; gap: .35rem; margin-inline-start: auto; }
+.suwa-header a { color: var(--ivory); font-size: .85rem; }
+.suwa-reception-header { padding-right: calc(min(26vw, 31rem) + var(--edge)); background: url("/suwadora/reception-veranda.webp") right center / min(26vw, 31rem) 100% no-repeat, linear-gradient(105deg, #541127, var(--maroon)); }
+.suwa-account { display: flex; align-items: center; flex-wrap: wrap; gap: .55rem; color: var(--ivory); font-size: .8rem; }
+.suwa-shell .suwa-account button { min-height: auto; padding: .15rem .5rem; font-size: inherit; background: transparent; border-color: var(--gold); }
+.suwa-shell .suwa-message { margin: .65rem var(--edge); }
+.suwa-nav { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: .35rem clamp(.4rem, 2.2vw, 2.4rem); padding: .55rem var(--edge); border-bottom: 2px solid var(--gold); }
+.suwa-nav a { border-radius: .55rem; color: var(--deep); text-decoration: none; font-weight: 700; padding: .55rem clamp(.5rem, 1.55vw, 1.5rem); }
+.suwa-nav a:hover { background: var(--wash); }
+.suwa-nav a[aria-current] { color: var(--paper); background: var(--maroon); }
+.suwa-nav a[aria-current]:is([href="#my-visits"],[href="#patient-lab-results"],[href="#patient-appointments"]) { color: var(--deep); background: var(--gold-light); }
+.suwa-nav a + a { position: relative; }
+.suwa-nav a + a::before { content: ""; position: absolute; top: .4rem; bottom: .4rem; left: calc(-1 * clamp(.2rem, 1.1vw, 1.2rem)); border-left: 1px solid var(--border); }
+
+.suwa-shell label { display: block; font-weight: 650; }
+.suwa-shell :is(input, select, textarea) {
+  max-width: 100%; border: 1px solid #a4897b; border-radius: .5rem; padding: .52rem .72rem;
+  min-height: 2.65rem; color: var(--ink); background: #fffefa; font: inherit;
+}
+.suwa-shell :is(input:not([type="checkbox"]), textarea) { display: block; width: 100%; }
+.suwa-shell textarea { resize: vertical; }
+.suwa-shell button {
+  border: 1px solid var(--maroon); border-radius: .5rem; padding: .53rem 1rem; min-height: 2.6rem;
+  color: #fff; background: linear-gradient(#771f3e, var(--maroon)); font: inherit; font-weight: 700; cursor: pointer;
+}
+.suwa-shell button:hover:not(:disabled) { filter: brightness(1.12); }
+.suwa-shell button:disabled { opacity: .6; cursor: default; }
+.suwa-shell button.suwa-secondary { color: var(--maroon); background: transparent; }
+.suwa-shell button.suwa-gold, .suwa-gold { color: var(--deep); background: linear-gradient(#f6ca68, #e9a728); border-color: #b37b25; }
+.suwa-shell :focus-visible, .suwa-board :focus-visible { outline: 3px solid #9a6000; outline-offset: 3px; }
+.suwa-shell [role="alert"] { color: #842424; font-weight: 650; }
+.suwa-shell a:not([class]) { text-underline-offset: .2em; }
+.suwa-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); gap: 1rem; }
+.suwa-panel, .suwa-card, .suwa-record { min-width: 0; overflow-wrap: anywhere; background: var(--paper); border: 1px solid var(--border); border-radius: .85rem; padding: clamp(.85rem, 1.6vw, 1.4rem); }
+.suwa-panel { margin: clamp(1rem, 2vw, 2rem) var(--edge); }
+.suwa-shell > section:not(.suwa-panel) { margin: 1.25rem var(--edge); }
+.suwa-shell > [role="status"] { margin: 1rem var(--edge); }
+.suwa-card form > :is(label, p) { margin: .55rem 0; }
+.suwa-records, .suwa-counts, .suwa-queue-rail ol { list-style: none; margin: .75rem 0 0; padding: 0; }
+.suwa-records > li + li { margin-top: .8rem; }
+.suwa-record header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .45rem; margin-bottom: .55rem; }
+.suwa-record summary { cursor: pointer; }
+.suwa-record summary time { display: block; margin: .35rem 0 0 1rem; }
+.suwa-record summary .suwa-pill { float: right; margin-left: .5rem; }
+.suwa-pill { display: inline-block; color: var(--deep); border-radius: 99rem; background: var(--gold-light); font-weight: 700; padding: .2rem .65rem; font-size: .84rem; }
+.suwa-veranda { width: 100%; height: clamp(5.5rem, 11.5vw, 13rem); object-fit: fill; display: block; background: var(--maroon); border-top: 2px solid var(--gold); }
+.suwa-ivory-veranda { width: 100%; max-width: 18rem; display: block; mix-blend-mode: multiply; margin-top: auto; }
+
+.suwa-sign-in { min-height: calc(100vh - 5.9rem); background: var(--maroon); display: grid; grid-template-columns: 47% 53%; align-items: center; }
+.suwa-sign-art { align-self: stretch; min-height: 33rem; background: url("/suwadora/sign-in-veranda.webp") center center / cover no-repeat; }
+.suwa-sign-card {
+  width: min(94%, 43rem); margin: 1.4rem auto; padding: clamp(1.35rem, 3vw, 3.3rem);
+  background: var(--ivory); border: 7px double var(--gold); border-radius: 2.2rem .9rem;
+  box-shadow: 0 0 0 3px var(--ivory), 0 .6rem 2rem #360b23;
+}
+.suwa-sign-card h1 { text-align: center; font-size: clamp(2.6rem, 5vw, 5rem); }
+.suwa-sign-card > p { text-align: center; border-bottom: 2px solid var(--gold); padding-bottom: 1.3rem; margin-bottom: 1.35rem; font-size: 1.2rem; }
+.suwa-sign-card label { margin-bottom: 1rem; }
+.suwa-sign-card input { margin-top: .35rem; min-height: 3.25rem; }
+.suwa-sign-card button[type="submit"] { display: block; width: 100%; margin-top: .9rem; min-height: 3.3rem; font-size: 1.22rem; }
+
+.suwa-visit { display: grid; grid-template-columns: 44% 56%; }
+.suwa-progress { padding: clamp(1.2rem, 2.8vw, 3rem) var(--edge); }
+.suwa-progress ol { list-style: none; padding: 0; margin: 1.45rem 0; }
+.suwa-progress li { position: relative; display: flex; align-items: center; gap: 1rem; min-height: 3.7rem; font-weight: 750; font-size: clamp(1rem, 1.9vw, 1.5rem); }
+.suwa-progress li::before { content: ""; width: .9rem; height: .9rem; background: var(--ivory); border: 2px solid #b68a55; border-radius: 50%; z-index: 1; box-sizing: content-box; }
+.suwa-progress li:not(:last-child)::after { content: ""; position: absolute; width: 2px; background: #b68a55; top: 50%; bottom: -50%; left: .52rem; }
+.suwa-progress li:is([aria-current],.suwa-step-done)::before { background: var(--maroon); border-color: var(--gold); box-shadow: 0 0 0 4px var(--gold); }
+.suwa-progress li[aria-current] span, .suwa-callout { background: #ffe5ad; border-radius: .55rem; padding: .35rem .75rem; }
+.suwa-progress .suwa-callout { width: fit-content; border: 1px solid var(--gold); padding: .75rem 1rem; margin-top: 1rem; font-weight: 750; }
+.suwa-door-ticket { min-height: clamp(26rem, 33vw, 36rem); background: radial-gradient(ellipse, #761938 10%, #531025 85%); padding: clamp(1rem, 3vw, 3rem) clamp(1rem, 6vw, 6rem) 0; text-align: center; color: var(--ivory); }
+.suwa-door-frame { position: relative; min-height: 100%; border: 6px double #e9b949; border-bottom: 0; border-radius: 4rem 4rem 0 0; padding: 2rem 1rem 1rem; }
+.suwa-door-frame::before { pointer-events: none; position: absolute; content: ""; inset: .7rem .7rem 0; border: 1px solid #fcce55; border-bottom: 0; border-radius: 3.3rem 3.3rem 0 0; }
+.suwa-door-frame h2 { color: var(--ivory); display: table; margin: 0 auto; border-bottom: 2px solid var(--gold); padding: 0 .5rem .4rem; }
+.suwa-door-frame .suwa-ticket-number { font-size: clamp(4rem, 9vw, 9rem); line-height: 1.02; font-weight: 850; letter-spacing: -.06em; margin: .15em 0; }
+.suwa-door-frame figure { margin: 0; }
+.suwa-door-frame figure img { width: clamp(7.2rem, 14vw, 12rem); height: auto; background: #fff; image-rendering: pixelated; }
+.suwa-qr-preview { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; margin-top: .7rem; border: 2px solid var(--gold); border-radius: .5rem; background: var(--deep); }
+.suwa-door-frame figcaption { font-size: .83rem; color: #ffdea1; }
+.suwa-token-history ul { padding-left: 1.2rem; }
+.suwa-token-history li { padding: .45rem 0; }
+.suwa-token-history button { margin: .2rem; }
+.suwa-token-history form, .suwa-inline { display: flex !important; gap: .65rem; align-items: center; flex-wrap: wrap; }
+
+.suwa-record-layout { display: grid; grid-template-columns: minmax(13rem, 31%) 1fr; min-height: 65vh; padding: 1.65rem var(--edge); gap: clamp(1rem, 2.4vw, 2.5rem); }
+.suwa-record-rail { display: flex; align-items: flex-start; flex-direction: column; gap: .75rem; border-right: 1px solid var(--border); padding-right: 1.4rem; }
+.suwa-record-main { min-width: 0; }
+.suwa-record-main > section { margin-bottom: 1.8rem; }
+.suwa-record-main > section > h3 { background: var(--wash); border-radius: .65rem; padding: .65rem .8rem; }
+.suwa-filter-buttons { display: grid; gap: .55rem; width: 100%; }
+.suwa-filter-buttons button { color: var(--deep); background: transparent; text-align: left; border-color: transparent; }
+.suwa-filter-buttons button[aria-pressed="true"], .suwa-rail-link { color: var(--deep); background: var(--gold-light); border-radius: .5rem; padding: .55rem 1rem; }
+.suwa-next {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 1.3rem; color: var(--ivory);
+  background: linear-gradient(105deg,var(--maroon), var(--deep)); border: 6px double var(--gold);
+  border-radius: 1.35rem .55rem; padding: 1.3rem; margin-bottom: 1.25rem;
+}
+.suwa-next time { font-size: clamp(1.2rem, 2.5vw, 2rem); font-weight: 750; border-left: 1px solid var(--gold); padding-left: 1.3rem; }
+
+.suwa-workspace, .suwa-support-workspace { display: grid; grid-template-columns: minmax(11.5rem, 20%) 1fr; min-height: 66vh; }
+.suwa-workspace-main { min-width: 0; padding: 1.4rem clamp(1rem, 2.35vw, 2.5rem); }
+.suwa-rail {
+  color: var(--ivory); padding: 1.25rem .8rem 10rem;
+  background: url("/suwadora/doorway-mark.webp") center calc(100% - 1.1rem) / 5.5rem auto no-repeat, linear-gradient(145deg, #691832, #4b0d23);
+  border-bottom: 3px solid var(--gold);
+}
+.suwa-rail nav { display: grid; gap: .55rem; }
+.suwa-rail nav a { padding: .55rem .7rem; border-radius: .5rem; text-decoration: none; color: var(--ivory); font-weight: 700; }
+.suwa-rail nav a:hover, .suwa-rail nav a[aria-current] { color: var(--deep); background: var(--gold-light); }
+.suwa-rail h3 { color: var(--ivory); }
+.suwa-workspace-heading { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: .8rem; }
+.suwa-workspace-heading h1 { margin: 0; }
+.suwa-workspace-heading span { padding-left: .7rem; border-left: 2px solid var(--gold); }
+.suwa-reception-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(11rem, 1fr); gap: .9rem; }
+.suwa-check-in { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; border-color: var(--gold); }
+.suwa-check-in h2 { background: var(--wash); border-radius: .45rem; padding: .55rem; }
+.suwa-check-in form:first-child h2 { background: var(--maroon); color: var(--ivory); }
+.suwa-walk-in { margin-top: .9rem; border-color: var(--gold); }
+.opd-print-ticket { margin: .9rem 0; padding: .9rem; border: 1px dashed var(--gold); background: var(--ivory); }
+.suwa-queue-rail li { background: var(--ivory); color: var(--deep); border: 1px solid var(--border); padding: .55rem .7rem; border-radius: .55rem; display: flex; justify-content: space-between; align-items: center; gap: .45rem; margin-bottom: .55rem; }
+.suwa-queue-rail li:first-child { background: #fbe2a8; border-color: #e5bc60; }
+.suwa-queue-rail li strong { font-size: clamp(1.25rem, 2.2vw, 1.9rem); }
+.suwa-queue-rail li span { font-size: .81rem; padding-left: .45rem; border-left: 1px solid var(--border); }
+.suwa-doctor .suwa-rail { background-image: url("/suwadora/doctor-veranda.webp"), linear-gradient(145deg, #691832, #4b0d23); background-position: center bottom; background-size: 100% auto; padding-bottom: min(22vw, 17rem); }
+.suwa-doctor .suwa-rail > button { width: 100%; }
+.suwa-consultation { display: flex; align-items: center; flex-wrap: wrap; gap: .65rem; }
+.suwa-consultation > p { margin: 0; }
+.suwa-active-token { font-size: 2rem; }
+.suwa-clinical { margin-top: 1rem; }
+.suwa-clinical-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1rem; margin-bottom: .55rem; }
+.suwa-clinical-toolbar :is(h2, h3, p) { margin: 0; }
+.suwa-clinical-toolbar p:last-child { margin-inline-start: auto; }
+.suwa-chart { margin-top: 1rem; }
+.suwa-editor { margin: .75rem 0; }
+.suwa-editor .suwa-notes { grid-template-columns: 1.25fr 1fr; }
+.suwa-editor textarea { margin-top: .25rem; }
+.suwa-chart-panels { margin-top: .85rem; }
+.suwa-counts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .75rem; margin-bottom: 1rem; }
+.suwa-counts li { text-align: center; font-weight: 700; background: var(--paper); padding: .8rem .4rem; border: 1px solid var(--border); border-radius: .65rem; }
+.suwa-counts li:nth-child(2) { background: #fce5af; border-color: var(--gold); }
+.suwa-counts strong { display: block; font-size: clamp(1.65rem, 3.2vw, 3rem); color: var(--maroon); }
+.suwa-admin-grid :is(ul, ol) { padding: 0; list-style: none; }
+.suwa-admin-grid li { padding: .45rem .55rem; border: 1px solid var(--border); border-radius: .45rem; margin-bottom: .25rem; }
+.suwa-admin-grid details, .suwa-all-counts { margin: .75rem 0; }
+.suwa-admin-grid summary, .suwa-all-counts summary { cursor: pointer; color: var(--maroon); font-weight: 700; }
+.suwa-support-workspace > div { min-width: 0; }
+.suwa-support-workspace .suwa-panel { border: 0; background: transparent; margin: 0; padding: 1.5rem clamp(1rem, 3vw, 3rem); }
+.suwa-support-workspace h2 { font-size: clamp(2rem, 3.6vw, 3.4rem); }
+.suwa-call-notice { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 2rem; border-color: var(--gold); background: #fbe6b3; }
+.suwa-notice-ticket { font-size: 2.25rem; font-weight: 850; line-height: 1; color: var(--maroon); }
+.suwa-notice-filters { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .7rem; }
+.suwa-notice-filters button[aria-pressed="true"] { background: var(--gold-light); }
+.suwa-notification-list { max-height: clamp(21rem, 42vh, 32rem); overflow-y: auto; padding: .15rem .55rem .25rem .15rem; }
+.suwa-faq-form { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: .45rem .8rem; }
+.suwa-faq-form label { grid-column: 1 / -1; }
+.suwa-faq-form button { background: linear-gradient(#f6ca68, #e9a728); color: var(--deep); border-color: #b37b25; }
+.suwa-answer > p { border: 1px solid var(--gold); background: #fbe6b3; border-radius: .9rem .35rem; padding: 1.25rem; font-size: clamp(1.1rem, 2.2vw, 1.65rem); font-weight: 750; }
+.suwa-answer ul { list-style: none; padding: 0; }
+.suwa-answer li { background: var(--paper); border: 1px solid var(--border); border-radius: .55rem; padding: .8rem; margin: .5rem 0; }
+
+.suwa-board { background: radial-gradient(ellipse at center, #761938, #530d22); color: var(--ivory); padding: clamp(.65rem, 1.2vw, 1.5rem); }
+.suwa-board-frame {
+  border: 8px double #e8b744; border-radius: 1.25rem .3rem; min-height: calc(100vh - clamp(1.3rem, 2.4vw, 3rem));
+  padding: clamp(.85rem, 1.7vw, 2rem); display: flex; flex-direction: column;
+  background: url("/suwadora/board-trim.webp") center bottom / 98% auto no-repeat;
+  padding-bottom: clamp(4rem, 7.6vw, 9rem);
+}
+.suwa-board header { display: flex; align-items: center; flex-wrap: wrap; gap: clamp(.75rem, 2.5vw, 2.8rem); padding: .5rem 1rem 1.2rem; }
+.suwa-board h1 { color: var(--ivory); font-size: clamp(1.9rem, 4.4vw, 5rem); margin: 0; padding-left: 1rem; border-left: 2px solid var(--gold); }
+.suwa-board header [role="status"] { color: #ffe59d; margin-left: auto; }
+.suwa-board table { table-layout: fixed; border-spacing: .45rem .65rem; width: 100%; text-align: center; color: var(--deep); }
+.suwa-board th { padding: .45rem; background: linear-gradient(110deg,#f2c166,#e5a028); border-radius: .75rem; font-size: clamp(1.5rem, 4vw, 4.5rem); line-height: 1.08; }
+.suwa-board td { background: var(--ivory); border-radius: .75rem; padding: .12em .2em; font-size: clamp(2.1rem, min(11vw, 16vh), 13rem); font-weight: 850; line-height: 1.06; letter-spacing: -.035em; overflow-wrap: anywhere; }
+.suwa-board td:first-child, .suwa-board th:first-child { width: 56%; }
+.suwa-board a { color: var(--ivory); font-size: .85rem; align-self: flex-start; margin-top: auto; }
+.suwa-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+@media (max-width: 850px) {
+  .suwa-reception-grid { grid-template-columns: 1fr; }
+  .suwa-reception-header { padding-right: var(--edge); background-image: linear-gradient(105deg, #541127, var(--maroon)); }
+  .suwa-record-layout { grid-template-columns: minmax(10rem, 32%) 1fr; }
+}
+@media (max-width: 600px) {
+  .suwa-header { min-height: 4.6rem; gap: .55rem; }
+  .suwa-brand img { width: 2.85rem; }
+  .suwa-context { display: none; }
+  .suwa-header a { font-size: .75rem; }
+  .suwa-header-actions { justify-items: start; margin-inline-start: 0; }
+  .suwa-nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); text-align: center; gap: .2rem; font-size: .84rem; }
+  .suwa-nav a { padding: .4rem .1rem; }
+  .suwa-nav a + a::before { content: none; }
+  .suwa-sign-in, .suwa-visit, .suwa-record-layout, .suwa-workspace, .suwa-support-workspace { grid-template-columns: 1fr; }
+  .suwa-sign-art { min-height: 10rem; background-position: center 57%; }
+  .suwa-sign-card { margin: 1rem auto 2rem; }
+  .suwa-progress ol { margin: .75rem 0; }
+  .suwa-progress li { min-height: 2.45rem; }
+  .suwa-door-ticket { min-height: 22rem; }
+  .suwa-veranda { height: auto; }
+  .suwa-record-rail { padding: 0 0 1rem; border-right: 0; border-bottom: 1px solid var(--border); }
+  .suwa-ivory-veranda { display: none; }
+  .suwa-record-main > section:first-child { margin-top: .2rem; }
+  .suwa-rail, .suwa-doctor .suwa-rail { background-image: none; background-color: var(--maroon); padding: .55rem var(--edge); }
+  .suwa-rail nav { display: flex; flex-wrap: wrap; gap: .2rem; }
+  .suwa-rail nav a { padding: .35rem .4rem; }
+  .suwa-check-in, .suwa-counts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .suwa-faq-form { grid-template-columns: 1fr; }
+  .suwa-editor .suwa-notes { grid-template-columns: 1fr; }
+  .suwa-clinical-toolbar p:last-child { margin-inline-start: 0; }
+  .suwa-notification-list { max-height: none; }
+  .suwa-board header { padding-inline: .3rem; }
+}
+@media (max-width: 390px) {
+  .suwa-check-in { grid-template-columns: 1fr; }
+}

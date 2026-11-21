@@ -9,9 +9,11 @@ import { OpdDatePicker } from "./opd-date-picker";
 import { OpdReception } from "./opd-reception";
 import { OpdDoctorRoom } from "./opd-doctor-room";
 import { ClinicalLab } from "./clinical-lab";
+import { OpdAdmin } from "./opd-admin";
+import { FaqAssistant, PatientNotifications } from "./patient-support";
 import { PatientVisits } from "./patient-visits";
 import { opdRequest } from "./opd-request";
-import Link from "next/link";
+import { formatToken, PortalHeader, Veranda, WorkspaceRail } from "./suwadora";
 import QRCode from "qrcode";
 
 type Profile = { id: number; firebaseUid: string; role: string };
@@ -20,6 +22,16 @@ type PatientToken = Booking & {
   status: "Booked" | "Waiting" | "Called" | "InConsultation" | "Completed" | "Cancelled" | "NoShow";
   calledAt: string | null;
   waitingAhead: number | null;
+};
+
+const patientScreens = [
+  ["today-tokens", "My OPD visit"], ["my-visits", "My Visits"], ["patient-lab-results", "Lab results"],
+  ["patient-appointments", "Appointments"], ["notifications", "Notifications"], ["faq-assistant", "FAQ assistant"],
+] as const;
+type PatientScreen = typeof patientScreens[number][0];
+const visitSteps = ["Booked", "Checked in", "Called", "Complete"];
+const visitProgress: Partial<Record<PatientToken["status"], number>> = {
+  Booked: 0, Waiting: 1, Called: 2, InConsultation: 2, Completed: 3,
 };
 
 const firebaseConfig = {
@@ -51,6 +63,23 @@ export default function Home() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [checkInCode, setCheckInCode] = useState<{ bookingId: number; image: string; expiresAt: string } | null>(null);
+  const [screen, setScreen] = useState<PatientScreen>("today-tokens");
+  const [passwordVisible, setPasswordVisible] = useState(false);
+
+  useEffect(() => {
+    if (!checkInCode) return;
+    const timer = window.setTimeout(() => setCheckInCode(null), Math.max(0, Date.parse(checkInCode.expiresAt) - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [checkInCode]);
+
+  useEffect(() => {
+    function readScreen() {
+      setScreen(patientScreens.find(([id]) => `#${id}` === window.location.hash)?.[0] ?? "today-tokens");
+    }
+    readScreen();
+    window.addEventListener("hashchange", readScreen);
+    return () => window.removeEventListener("hashchange", readScreen);
+  }, []);
 
   useEffect(() => {
     if (!firebaseConfigured) return;
@@ -85,7 +114,7 @@ export default function Home() {
         });
         if (signal.aborted) return;
         if (response.status === 403) {
-          setMessage("Your Firebase account is signed in. Ask an administrator to provision your MediFlow account.");
+          setMessage("Your Firebase account is signed in. Ask an administrator to provision your SuwaDora account.");
         } else if (response.status === 401) {
           setMessage("The API rejected your sign-in token. Sign out and try again.");
         } else if (response.ok) {
@@ -96,7 +125,7 @@ export default function Home() {
           setMessage("The API could not load your profile.");
         }
       } catch {
-        if (!signal.aborted) setMessage("Could not reach the MediFlow API.");
+        if (!signal.aborted) setMessage("Could not reach the SuwaDora API.");
       }
     });
 
@@ -129,7 +158,7 @@ export default function Home() {
       }
 
       inFlight = true;
-      let failure = "Could not reach the MediFlow API.";
+      let failure = "Could not reach the SuwaDora API.";
       try {
         const token = await patient.getIdToken();
         if (signal.aborted) return;
@@ -262,7 +291,7 @@ export default function Home() {
     try {
       const { code, expiresAt } = await opdRequest<{ code: string; expiresAt: string }>(
         owner, apiUrl, `/api/opd/bookings/${bookingId}/check-in-code`, { method: "POST" });
-      const image = await QRCode.toDataURL(code, { width: 220, margin: 4 });
+      const image = await QRCode.toDataURL(code, { scale: 12, margin: 4, color: { dark: "#000000", light: "#ffffff" } });
       setCheckInCode({ bookingId, image, expiresAt });
     } catch {
       setMessage("Could not get a check-in QR. You can give reception your token number.");
@@ -308,29 +337,59 @@ export default function Home() {
     }
   }
 
+  const ticketToken = viewingToday ? tokens?.find((item) => item.id === checkInCode?.bookingId && item.status === "Booked")
+    ?? tokens?.findLast((item) => item.status !== "Cancelled" && item.status !== "NoShow") : undefined;
+  const stage = ticketToken ? visitProgress[ticketToken.status] : undefined;
+  const showQrImage = ticketToken && ticketToken.status === "Booked"
+    && checkInCode?.bookingId === ticketToken.id && Date.parse(checkInCode.expiresAt) > Date.now();
+  const context = profile?.role === "Patient"
+    ? screen === "notifications" ? "Notifications" : screen === "faq-assistant" ? "OPD FAQ assistant" : "Patient Portal"
+    : profile?.role === "Doctor" ? "Doctor Workspace" : profile?.role === "OpdAdmin" ? "OPD Administration"
+      : profile?.role === "LabStaff" ? "Laboratory" : undefined;
+
   return (
-    <main>
-      <h1>MediFlow</h1>
-      <Link href="/display">Public OPD token display</Link>
+    <main className="suwa-shell">
+      <PortalHeader title={context} reception={profile?.role === "Reception"} account={user && (
+          <div className="suwa-account">
+            <span>Signed in as {user.email}</span>
+            <button type="button" disabled={busy} onClick={handleSignOut}>Sign out</button>
+          </div>
+      )} />
       {!authReady ? <p role="status">Restoring sign-in…</p> : user ? (
         <>
-          <p>Signed in as {user.email}</p>
-          {profile && (
-            <dl>
-              <dt>App user ID</dt>
-              <dd>{profile.id}</dd>
-              <dt>Firebase UID</dt>
-              <dd>{profile.firebaseUid}</dd>
-              <dt>Role</dt>
-              <dd>{profile.role}</dd>
-            </dl>
-          )}
+          {message && <p className="suwa-message" role="status">{message}</p>}
           {profile?.role === "Patient" && (
             <>
-              <p><a href="#my-visits">My Visits</a></p>
-              {viewingToday && <button type="button" disabled={busy} onClick={handleBooking}>Book OPD token</button>}
-              {viewingToday && booking && <p role="status">Booked OPD token {booking.tokenNumber} for {booking.opdDate}</p>}
-              <section aria-labelledby="today-tokens">
+              <nav className="suwa-nav" aria-label="Patient portal">
+                {patientScreens.map(([id, label]) => <a key={id} href={`#${id}`}
+                  aria-current={screen === id ? "page" : undefined} onClick={() => setScreen(id)}>{label}</a>)}
+              </nav>
+              <div hidden={screen !== "today-tokens"}>
+                <div className="suwa-visit">
+                  <div className="suwa-progress">
+                    <h1>My OPD visit</h1>
+                    <ol>{visitSteps.map((step, index) => <li key={step} aria-current={stage === index ? "step" : undefined}
+                      className={stage !== undefined && index < stage ? "suwa-step-done" : undefined}><span>{step}</span></li>)}</ol>
+                    {viewingToday && <button type="button" disabled={busy} onClick={handleBooking}>Book OPD token</button>}
+                    {viewingToday && booking && <p role="status">Booked OPD token {booking.tokenNumber} for {booking.opdDate}</p>}
+                    {ticketToken?.status === "Booked" && <p className="suwa-callout">Show your token at reception</p>}
+                  </div>
+                  <div className="suwa-door-ticket">
+                    <div className="suwa-door-frame">
+                      <h2>General OPD</h2>
+                      {ticketToken ? <p className="suwa-ticket-number">{formatToken(ticketToken.tokenNumber)}</p>
+                        : <p>{viewingToday ? "Your token will appear here." : "Select Today to view your active ticket."}</p>}
+                      {showQrImage && <figure>
+                        <img src={checkInCode.image} alt={`Check-in QR for token ${ticketToken.tokenNumber}`} width={220} height={220} />
+                        <figcaption>Expires at {calledTime.format(new Date(checkInCode.expiresAt))}</figcaption>
+                      </figure>}
+                      {ticketToken?.status === "Booked" && !showQrImage && <button className="suwa-gold" type="button"
+                        disabled={busy} onClick={() => void prepareCheckIn(ticketToken)}>Show check-in QR</button>}
+                    </div>
+                  </div>
+                </div>
+                <Veranda />
+              <section className="suwa-panel suwa-token-history" aria-labelledby="today-tokens">
                 <h2 id="today-tokens">{viewingToday ? "Today’s OPD tokens" : `OPD tokens for ${selectedDate}`}</h2>
                 <OpdDatePicker date={selectedDate} today={today} disabled={busy} onSelect={selectDate} />
                 {tokens === null && !tokenError && <p role="status">Loading tokens…</p>}
@@ -348,42 +407,56 @@ export default function Home() {
                         {item.calledAt && (
                           <> at <time dateTime={item.calledAt}>{calledTime.format(new Date(item.calledAt))}</time></>
                         )}
-                        {viewingToday && item.status === "Booked" && (
+                        {viewingToday && item.status === "Booked" && item.id !== ticketToken?.id && (
                           <> <button type="button" disabled={busy} onClick={() => void prepareCheckIn(item)}>Show check-in QR</button></>
                         )}
                         {viewingToday && (item.status === "Waiting" || item.status === "Booked") && (
                           <> <button type="button" disabled={busy} aria-label={`Cancel token ${item.tokenNumber}`}
                             onClick={() => void handleCancel(item)}>Cancel</button></>
                         )}
-                        {viewingToday && item.status === "Booked" && checkInCode?.bookingId === item.id
-                          && Date.parse(checkInCode.expiresAt) > Date.now() && (
-                          <figure>
-                            <img src={checkInCode.image} alt={`Check-in QR for token ${item.tokenNumber}`} width={220} height={220} />
-                            <figcaption>Show this QR at reception. Expires at {calledTime.format(new Date(checkInCode.expiresAt))}.</figcaption>
-                          </figure>
-                        )}
                       </li>
                     ))}
                   </ul>
                 ))}
               </section>
-              <PatientVisits key={user.uid} user={user} apiUrl={apiUrl} />
+              </div>
+              <div hidden={screen !== "my-visits" && screen !== "patient-lab-results" && screen !== "patient-appointments"}>
+                <PatientVisits key={user.uid} user={user} apiUrl={apiUrl} screen={screen} />
+              </div>
+              <div hidden={screen !== "notifications" && screen !== "faq-assistant"} key={`support-${user.uid}`}>
+                <div className="suwa-support-workspace">
+                  <WorkspaceRail><nav aria-label="Patient support">
+                    <a href="#notifications" onClick={() => setScreen("notifications")} aria-current={screen === "notifications" ? "page" : undefined}>Notifications</a>
+                    <a href="#faq-assistant" onClick={() => setScreen("faq-assistant")} aria-current={screen === "faq-assistant" ? "page" : undefined}>FAQ assistant</a>
+                  </nav></WorkspaceRail>
+                  <div hidden={screen !== "notifications"}><PatientNotifications user={user} apiUrl={apiUrl} /></div>
+                  <div hidden={screen !== "faq-assistant"}><FaqAssistant user={user} apiUrl={apiUrl} /></div>
+                </div>
+                <Veranda />
+              </div>
             </>
           )}
           {profile?.role === "OpdStaff" && <OpdStaffQueue key={user.uid} user={user} apiUrl={apiUrl} />}
           {profile?.role === "Reception" && <OpdReception key={user.uid} user={user} apiUrl={apiUrl} />}
           {profile?.role === "Doctor" && <OpdDoctorRoom key={user.uid} user={user} apiUrl={apiUrl} />}
           {profile?.role === "LabStaff" && <ClinicalLab key={user.uid} user={user} apiUrl={apiUrl} />}
-          <button type="button" disabled={busy} onClick={handleSignOut}>Sign out</button>
+          {profile?.role === "OpdAdmin" && <OpdAdmin key={user.uid} user={user} apiUrl={apiUrl} />}
         </>
       ) : (
-        <form onSubmit={handleSignIn}>
-          <p><label>Email <input name="email" type="email" autoComplete="username" required /></label></p>
-          <p><label>Password <input name="password" type="password" autoComplete="current-password" required /></label></p>
-          <button type="submit" disabled={busy}>Sign in</button>
-        </form>
+        <div className="suwa-sign-in">
+          <div className="suwa-sign-art" aria-hidden="true" />
+          <form onSubmit={handleSignIn} className="suwa-sign-card" aria-labelledby="sign-in-title">
+            <h1 id="sign-in-title">Sign in</h1>
+            <p>Patient Portal</p>
+            <label>Email <input name="email" type="email" autoComplete="username" required /></label>
+            <label>Password <input name="password" type={passwordVisible ? "text" : "password"} autoComplete="current-password" required /></label>
+            <button className="suwa-secondary" type="button" aria-pressed={passwordVisible}
+              onClick={() => setPasswordVisible((value) => !value)}>{passwordVisible ? "Hide password" : "Show password"}</button>
+            <button type="submit" disabled={busy}>Sign in</button>
+            {message && <p role="alert">{message}</p>}
+          </form>
+        </div>
       )}
-      {message && <p role="status">{message}</p>}
     </main>
   );
 }

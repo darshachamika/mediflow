@@ -3,6 +3,7 @@
 import { HubConnectionBuilder, HttpTransportType } from "@microsoft/signalr";
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { Brand, formatToken } from "../suwadora";
 
 type PublicToken = { tokenNumber: number; room: string };
 const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5080";
@@ -81,20 +82,21 @@ export default function OpdDisplay() {
   }, []);
 
   return (
-    <main>
-      <h1>OPD token display</h1>
-      <p role="status">{connection}</p>
+    <main className="suwa-board">
+      <div className="suwa-board-frame">
+      <header><Brand /><h1>OPD queue</h1><span role="status">{connection}</span></header>
       {snapshotError && <p role="status">The current display could not be loaded.</p>}
       {tokens?.length === 0 && <p>No tokens are currently called.</p>}
       {tokens && tokens.length > 0 && (
         <table>
-          <thead><tr><th scope="col">Token number</th><th scope="col">Room</th></tr></thead>
+          <thead><tr><th scope="col">Token<span className="suwa-sr-only"> number</span></th><th scope="col">Room</th></tr></thead>
           <tbody>{tokens.map(({ tokenNumber, room }) => (
-            <tr key={tokenNumber}><td>{tokenNumber}</td><td>{room}</td></tr>
+            <tr key={tokenNumber}><td aria-label={String(tokenNumber)}>{formatToken(tokenNumber)}</td><td>{room}</td></tr>
           ))}</tbody>
         </table>
       )}
-      <Link href="/">MediFlow sign-in</Link>
+      <Link href="/">SuwaDora sign-in</Link>
+      </div>
     </main>
   );
 }

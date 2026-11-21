@@ -287,6 +287,19 @@ VALUES ((SELECT id FROM app_users WHERE firebase_uid='$($accounts[0].localId)'),
     Assert ((Read-Response $walkInRetry).Raw -ceq $issued.Raw) 'Walk-in retry changed the token.'
     $lookup = (Read-Response (Send GET "/api/opd/reception/tokens/$($issued.Body.tokenNumber)" $reception)).Body
     Assert ($lookup.status -eq 'Waiting') 'Walk-in must enter Waiting directly.'
+    $workspaceQueue = '/api/opd/workspace-queue'
+    Read-Response (Send GET $workspaceQueue) 401
+    Read-Response (Send GET $workspaceQueue $patientA) 403
+    Read-Response (Send GET $workspaceQueue $staff) 403
+    $receptionRows = (Read-Response (Send GET $workspaceQueue $reception)).Body
+    $walkInRow = $receptionRows | Where-Object tokenNumber -eq $issued.Body.tokenNumber
+    Assert ($walkInRow.channel -eq 'Walk-in' -and $walkInRow.status -eq 'Waiting') 'Walk-in missing from reception queue.'
+    $doctorRows = (Read-Response (Send GET $workspaceQueue $doctorA)).Body
+    Assert ($doctorRows.Count -gt 0 -and @($doctorRows | Where-Object status -ne 'Waiting').Count -eq 0) 'Doctor rail must contain Waiting tokens.'
+    foreach ($row in ($receptionRows + $doctorRows)) {
+        Assert (($row.PSObject.Properties.Name | Sort-Object) -join ',' -eq 'channel,status,tokenNumber') 'Workspace queue includes unexpected fields.'
+    }
+    'PASS reception and assigned doctor queue data and privacy, anonymous and role rejection'
     'PASS reception authorization, expired QR, concurrent check-in, manual check-in and walk-in replay'
 
     $visit = (Read-Response (Send POST $bookings $patientA 'doctor-visit')).Body
