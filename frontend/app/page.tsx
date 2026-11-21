@@ -22,6 +22,7 @@ type PatientToken = Booking & {
   status: "Booked" | "Waiting" | "Called" | "InConsultation" | "Completed" | "Cancelled" | "NoShow";
   calledAt: string | null;
   waitingAhead: number | null;
+  estimate?: { available: boolean; minutes: number | null; source?: string; modelVersion?: string | null };
 };
 
 const patientScreens = [
@@ -180,6 +181,16 @@ export default function Home() {
         failure = "The API did not return a bookings array.";
         if (!Array.isArray(payload.items)) throw new Error(failure);
         const items: PatientToken[] = payload.items;
+        if (viewingToday) {
+          await Promise.all(items.filter((item) => item.status === "Waiting").map(async (item) => {
+            try {
+              item.estimate = await opdRequest<NonNullable<PatientToken["estimate"]>>(patient, apiUrl,
+                `/api/opd/bookings/${item.id}/eta`, { signal });
+            } catch {
+              // A failed ETA must not hide bookings or prevent the next scheduled refresh.
+            }
+          }));
+        }
 
         if (!signal.aborted) {
           setTokenSnapshot({ date: selectedDate, rows: items });
@@ -404,6 +415,11 @@ export default function Home() {
                         {viewingToday && item.status === "Waiting" && item.waitingAhead !== null && (
                           <> · {item.waitingAhead === 0 ? "Next in queue" : `${item.waitingAhead} ahead in queue`}</>
                         )}
+                        {viewingToday && item.status === "Waiting" && <span className="suwa-eta">
+                          {item.estimate?.available && item.estimate.minutes !== null
+                            ? ` · Approximate wait ${item.estimate.minutes} min`
+                            : " · Wait estimate unavailable"}
+                        </span>}
                         {item.calledAt && (
                           <> at <time dateTime={item.calledAt}>{calledTime.format(new Date(item.calledAt))}</time></>
                         )}

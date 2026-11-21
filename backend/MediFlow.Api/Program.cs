@@ -48,6 +48,14 @@ var fallbackMinutes = builder.Configuration.GetValue("OpdEta:FallbackMinutes", 1
 if (!double.IsFinite(fallbackMinutes) || fallbackMinutes is < 1 or > 180)
     throw new InvalidOperationException("OpdEta:FallbackMinutes must be between 1 and 180.");
 builder.Services.AddSingleton(new OpdEta(fallbackMinutes));
+builder.Services.AddSingleton(services =>
+{
+    var model = new EtaPredictor(builder.Configuration["OpdEta:ModelDirectory"],
+        builder.Configuration.GetValue("OpdEta:ModelEnabled", false),
+        builder.Environment.IsDevelopment() && builder.Configuration.GetValue("OpdEta:AllowSyntheticModel", false));
+    services.GetRequiredService<ILogger<EtaPredictor>>().LogInformation("OPD ETA model state {State}", model.State);
+    return model;
+});
 builder.Services.AddHttpClient("opd-faq", client => client.Timeout = TimeSpan.FromSeconds(20));
 builder.Services.AddSingleton<IFaqProvider>(services =>
     string.IsNullOrWhiteSpace(builder.Configuration["OpdFaq:ApiKey"])

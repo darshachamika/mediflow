@@ -158,7 +158,7 @@ Patient calls and follow-up bookings write an outbox entry in the same database 
 
 ### Approximate wait estimate
 
-`GET /api/opd/bookings/{id}/eta` estimates the wait for the owning patient's current Waiting token. It uses the check-in order, active assigned rooms, occupied rooms, and recent completed consultation durations. Configure the fallback with `OpdEta__FallbackMinutes` (default 12). With no serving rooms the estimate is unavailable. Check-in and walk-in issuance record feature snapshots for later evaluation. Consultation start time provides the eventual outcome.
+`GET /api/opd/bookings/{id}/eta` estimates the wait for the owning patient's current Waiting token. It uses the check-in order, active assigned rooms, occupied rooms, and recent completed consultation durations. Configure the fallback with `OpdEta__FallbackMinutes` (default 12). With no serving rooms the estimate is unavailable. Check-in and walk-in issuance record feature snapshots for later evaluation. The first call time provides the eventual outcome.
 
 ### Read-only FAQ assistant
 
@@ -170,19 +170,68 @@ The default is a local, deterministic FAQ provider with keyword retrieval. For v
 pwsh -NoProfile -File scripts/Test-OpdV1.ps1 -Vector
 ```
 
-### Offline ETA experiment
+### Waiting-time ML
 
 ```powershell
-dotnet run --project tools/eta-ml-experiment
+dotnet run --project tools/eta-ml-experiment -- --synthetic artifacts/eta/synthetic
 ```
 
-The default dataset is synthetic. The experiment reports held-out mean absolute error in minutes for the exact C# baseline and an ML.NET regression on the same chronological split. Features are captured at check-in. Training excludes visits whose outcome wasn't known by the split. For an approved dataset, run `tools/eta-ml-experiment/export.sql` in pgAdmin and export CSV with column headers. Keep the file outside the repository.
+The ML.NET SDCA regression predicts total minutes from queue entry to first call. It uses captured entry features of tokens ahead, serving rooms, busy rooms, recent consultation duration, and the exact existing baseline. The API subtracts elapsed waiting and caps the result with the current baseline so cancellations and extra serving rooms can reduce the remaining estimate. This conservative combination can underestimate long waits and requires operational evaluation before rollout.
+
+Arrival time and weekday are omitted until representative data supports them. Completed-duration features use only outcomes already available at observation time. The existing schema is reused and no migration is needed. The ETA endpoint adds source (Baseline or Model) and modelVersion. Only today's Waiting tokens show an approximate wait.
+
+The read-only export includes completed bookings with valid first calls, snapshots within five seconds of check-in, unchanged queue-entry timestamps, valid features, and no no-show or requeue events. Legacy bookings without samples are excluded. No identifiers, clinical text or credentials are exported. Export only databases with known provenance. CSV content cannot distinguish synthetic and operational records.
 
 ```powershell
-dotnet run --project tools/eta-ml-experiment -- --csv 'C:\path\outside\repo\eta.csv'
+Set-Location D:\Mad\mediflow
+docker compose up -d --wait postgres
+dotnet ef database update --project backend/MediFlow.Api -- --environment Development
+pwsh -NoProfile -File scripts/Export-OpdEta.ps1 -Container mediflow-postgres-1 -Output artifacts/eta/operational/visits.csv
+dotnet run --project tools/eta-ml-experiment -- --csv artifacts/eta/operational/visits.csv artifacts/eta/operational/candidate
+Get-Content artifacts/eta/operational/candidate/metadata.json
 ```
 
-The live API continues to use the C# baseline. Synthetic results are a demonstration of the pipeline.
+Apply development database migrations when ready to upgrade it. The implementation audit found 19 legacy local bookings and no ETA sample table, leaving zero usable captured observations. Operational activation remains disabled. Synthetic metrics demonstrate pipeline behavior only.
+
+Training uses seed 2026, one worker and no shuffling. The chronological 80/20 split groups entire Asia/Colombo dates and excludes training outcomes unknown before evaluation. Identical inputs produce identical model bytes and metadata on the verified runtime. Metadata records feature schema, model version, artifact SHA-256, data kind, partition counts/date ranges, MAE/RMSE and acceptance status.
+
+Initial activation gates require 100 training observations spanning at least 14 calendar dates, 30 evaluation observations spanning at least seven dates, at least 5% lower MAE and no worse RMSE than the baseline. These engineering gates were chosen for this milestone. Review provenance, representative coverage and errors for your OPD before rollout, and retain an untouched prospective dataset. The gates alone do not establish operational validity.
+
+After reviewing an operational candidate, explicitly set its directory and enable it, then restart the API. Firebase and PostgreSQL setup use the existing sections above.
+
+```powershell
+dotnet user-secrets set 'OpdEta:ModelDirectory' (Resolve-Path artifacts/eta/operational/candidate).Path --project backend/MediFlow.Api
+dotnet user-secrets set 'OpdEta:ModelEnabled' 'true' --project backend/MediFlow.Api
+$env:ASPNETCORE_ENVIRONMENT = 'Development'
+dotnet run --project backend/MediFlow.Api --no-launch-profile --urls http://localhost:5080
+# In a second terminal with frontend Firebase configuration ready
+npm.cmd --prefix frontend run build
+npm.cmd --prefix frontend run start
+```
+
+Rollback disables the model and restarts the API. A missing, corrupt, incompatible, unaccepted or synthetic operational artifact falls back automatically. Startup logs report model readiness. Invalid predictions fall back and no serving rooms means unavailable. The model is immutable until restart and predictions are synchronized for concurrency.
+
+```powershell
+dotnet user-secrets set 'OpdEta:ModelEnabled' 'false' --project backend/MediFlow.Api
+```
+
+Synthetic verification uses disposable PostgreSQL and Firebase Auth Emulator. Generated artifacts and exports stay beneath the Git-ignored artifacts/eta directory.
+
+```powershell
+dotnet run --project tools/eta-ml-experiment -- --synthetic artifacts/eta/synthetic
+dotnet run --project tools/eta-ml-experiment -- --synthetic artifacts/eta/repeated
+if ((Get-Content artifacts/eta/synthetic/metadata.json -Raw) -cne (Get-Content artifacts/eta/repeated/metadata.json -Raw)) { throw 'Training is not reproducible' }
+dotnet run --project tools/eta-ml-experiment -- --self-test
+dotnet build backend/MediFlow.Api
+pwsh -NoProfile -File scripts/Test-OpdV1.ps1 -MlTest
+$env:MEDIFLOW_SCREENSHOT_DIRECTORY = Join-Path $env:TEMP 'mediflow-eta-browser'
+pwsh -NoProfile -File scripts/Test-OpdV1.ps1 -BrowserTest -ClinicalBrowserTest
+# Optional interactive browser demo with synthetic inference
+pwsh -NoProfile -File scripts/Test-OpdV1.ps1 -MlTest -Browser
+git diff --check
+```
+
+Synthetic model loading requires Development plus explicit OpdEta:AllowSyntheticModel=true. The -MlTest fixture sets and restores its environment automatically. Keep this flag disabled for ordinary development. In the demo, book as patient-a@example.test, check in as reception@example.test, return to the patient tab and confirm Approximate wait appears after refresh. Cancel or call an earlier token and confirm the count and estimate update. Called, completed, cancelled and historical tokens have no waiting estimate. Patient B cannot request Patient A's ETA.
 
 ### C++ queue simulator
 
